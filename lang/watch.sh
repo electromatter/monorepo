@@ -32,6 +32,7 @@ while :; do
 
         # Run build.sh with a timeout with the pager.
         timeout "${TIMEOUT}" ./build.sh "$@" 2>&1
+        printf "; build exited ($?)\n"
 
         # Only page output from the build.
         exec > /dev/null 2>&1
