@@ -17,43 +17,44 @@
 
 set -ue
 
-: "${PAGER:="less +F"}"  # less with follow scrolling
-: "${SIGNAL:=10}"        # SIGUSR1
-: "${TIMEOUT:=1}"        # build timeout
-: "${DELAY:=1}"          # rebuild poll delay
+: "${CC:=gcc}"
+: "${CHK:=cppcheck}"
+: "${SAN:=valgrind}"
 
-# Let the pager handle INT and SIGNAL.
-trap ':' INT "${SIGNAL}"
+: "${SOURCES:=main.c}"
+: "${TARGET:=main.out}"
 
-while :; do
-    {
-        # Start timestamp
-        TIMESTAMP="$(./build.sh -q)"
+: "${CHKFLAGS:=--std=c89}"
+: "${CFLAGS:=-Wall -Wextra -pedantic -std=c89 -O1 -g}"
+: "${SANFLAGS=}"
 
-        # Run build.sh with a timeout with the pager.
-        timeout "${TIMEOUT}" ./build.sh "$@" 2>&1
+build() {
+    ${CHK} ${CHKFLAGS} ${SOURCES}
+    ${CC} ${CFLAGS} -o "${TARGET}" ${SOURCES}
+    ${SAN} "./${TARGET}"
+}
 
-        # Only page output from the build.
-        exec > /dev/null 2>&1
+query() {
+    find ${SOURCES} -printf '%Ts\n' | sort -nr | head -n1
+}
 
-        # Poll for changes after the build finishes.
-        while :; do
-            sleep "${DELAY}" || :
-            if [ "$(./build.sh -q)" -ne "${TIMESTAMP}" ]; then
-                kill "-${SIGNAL}" 0
-            fi
-        done &
-    } | ${PAGER} && STATUS=$? || STATUS=$?
+usage() {
+    echo "Usage: ${0##*/} [-q]" >&2
+}
 
-    # Exit if the pager failed wasn't killed by our signal.
-    if [ "${STATUS}" -ne $(( 128 + SIGNAL )) ]; then
-        # Kill the polling loop if it's still around.
-        kill -"${SIGNAL}" 0
+main() {
+    case "$#,$*" in
+    0,)
+        build
+        ;;
+    1,-q)
+        query
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+    esac
+}
 
-        # Clean up the terminal state just in case.
-        stty sane
-
-        # Pass along the status code.
-        exit "${STATUS}"
-    fi
-done
+main "$@"
