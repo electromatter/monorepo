@@ -31,7 +31,7 @@ while :; do
         TIMESTAMP="$(./build.sh -q)"
 
         # Run build.sh with a timeout with the pager.
-        timeout "${TIMEOUT}" ./build.sh "$@" 2>&1
+        (time timeout "${TIMEOUT}" ./build.sh "$@") 2>&1
         printf "; build exited ($?)\n"
 
         # Only page output from the build.
