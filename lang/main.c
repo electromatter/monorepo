@@ -62,37 +62,41 @@ enum tag {
 };
 
 
-union object;
+struct obhead {
+    int tag;
+    union object *next;
+    union object *back;
+};
 
 
 struct cons {
-    int tag;
+    struct obhead head;
     union object *car;
     union object *cdr;
 };
 
 
 struct string {
-    int tag;
+    struct obhead head;
     unsigned char *value;
     unsigned int length;
 };
 
 
 struct symbol {
-    int tag;
+    struct obhead head;
     union object *name;
 };
 
 
 struct fixnum {
-    int tag;
+    struct obhead head;
     int value;
 };
 
 
 union object {
-    int tag;
+    struct obhead head;
     struct cons cons;
     struct string string;
     struct symbol symbol;
@@ -104,7 +108,7 @@ void free_object(union object *object) {
     if (object == NULL) {
         return;
     }
-    switch (object->tag) {
+    switch (object->head.tag) {
     case TAG_NIL:
         break;
     case TAG_CONS:
@@ -127,8 +131,8 @@ void free_object(union object *object) {
 
 
 union object *makenil(void) {
-    static const int tag = TAG_NIL;
-    return (union object *)&tag;
+    static union object ob = {{TAG_NIL}};
+    return &ob;
 }
 
 
@@ -138,7 +142,7 @@ union object *makecons(union object *car, union object *cdr) {
     if (ret == NULL) {
         die("OUT OF MEMORY");
     }
-    ret->tag = TAG_CONS;
+    ret->head.tag = TAG_CONS;
     ret->car = car;
     ret->cdr = cdr;
     return (union object *)ret;
@@ -157,7 +161,7 @@ union object *makestring(unsigned char *value, unsigned int length) {
         die("OUT OF MEMORY");
     }
     memcpy(buf, value, length);
-    ret->tag = TAG_STRING;
+    ret->head.tag = TAG_STRING;
     ret->value = buf;
     ret->length = length;
     return (union object *)ret;
@@ -173,7 +177,7 @@ union object *makesymbol(unsigned char *name, unsigned int length) {
     if (ret == NULL) {
         die("OUT OF MEMORY");
     }
-    ret->tag = TAG_SYMBOL;
+    ret->head.tag = TAG_SYMBOL;
     ret->name = makestring(name, length);
     return (union object *)ret;
 }
@@ -185,7 +189,7 @@ union object *makefixnum(int value) {
     if (ret == NULL) {
         die("OUT OF MEMORY");
     }
-    ret->tag = TAG_FIXNUM;
+    ret->head.tag = TAG_FIXNUM;
     ret->value = value;
     return (union object *)ret;
 }
@@ -313,6 +317,7 @@ union object *lisp_read(int expect)
             return makecons(obj, makecons(lisp_read(1), makenil()));
 
         case '"':
+            length = 0;
             while (1) {
                 ch = getc(stdin);
                 if (ch == '"') {
@@ -357,7 +362,7 @@ int lisp_isnil(union object *object) {
     if (object == NULL) {
         die("INVALID VALUE");
     }
-    if (object->tag == TAG_NIL) {
+    if (object->head.tag == TAG_NIL) {
         return 1;
     }
     return 0;
@@ -370,7 +375,7 @@ void lisp_write(union object *object) {
     if (object == NULL) {
         die("INVALID VALUE");
     }
-    switch (object->tag) {
+    switch (object->head.tag) {
     case TAG_NIL:
         printf("nil");
         break;
@@ -380,7 +385,7 @@ void lisp_write(union object *object) {
             lisp_write(object->cons.car);
             if (lisp_isnil(object->cons.cdr)) {
                 break;
-            } else if (object->cons.cdr == NULL || object->cons.cdr->tag != TAG_CONS) {
+            } else if (object->cons.cdr == NULL || object->cons.cdr->head.tag != TAG_CONS) {
                 printf(" . ");
                 lisp_write(object->cons.cdr);
                 break;
@@ -407,7 +412,7 @@ void lisp_write(union object *object) {
     case TAG_SYMBOL:
         if (
             object->symbol.name == NULL
-            || object->symbol.name->tag != TAG_STRING
+            || object->symbol.name->head.tag != TAG_STRING
         ) {
             die("INVALID SYMBOL");
         }
