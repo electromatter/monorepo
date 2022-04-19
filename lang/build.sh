@@ -21,7 +21,7 @@ set -ue
 : "${CHK:=cppcheck}"
 : "${SAN:=valgrind}"
 
-: "${DEPENDS:=source.lisp}"
+: "${DEPENDS:=check.lisp}"
 : "${SOURCES:=main.c}"
 : "${TARGET:=main.out}"
 
