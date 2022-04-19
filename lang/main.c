@@ -14,19 +14,25 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.      *
  ******************************************************************************/
 
+#include <errno.h>
+#include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
-#include <errno.h>
 
 
-void die(char *why)
+void die(char *format, ...)
 {
+    va_list args;
+    va_start(args, format);
     fflush(stdout);
-    fprintf(stderr, "die: %s\n", why);
+    fputs("die: ", stderr);
+    vfprintf(stderr, format, args);
+    putc('\n', stderr);
     fflush(stderr);
     exit(1);
+    va_end(args);
 }
 
 
@@ -64,6 +70,7 @@ enum tag {
 
 struct obhead {
     int tag;
+    int mark;
     union object *next;
     union object *back;
 };
@@ -104,94 +111,155 @@ union object {
 };
 
 
-void free_object(union object *object) {
-    if (object == NULL) {
+union object *gclist = NULL;
+union object *markhead = NULL;
+union object **sweephead = NULL;
+
+
+int sweep1(void) {
+    union object *obj;
+
+    if (sweephead == NULL) {
+        return 0;
+    }
+
+    obj = *sweephead;
+    if (obj == NULL) {
+        sweephead = NULL;
+        return 0;
+    }
+
+    if (obj->head.mark) {
+        obj->head.mark = 0;
+        sweephead = &obj->head.next;
+    } else {
+        *sweephead = obj->head.next;
+        free(obj);
+    }
+
+    return 1;
+}
+
+
+void mark(union object *obj) {
+    if (obj->head.mark != 0) {
         return;
     }
-    switch (object->head.tag) {
+
+    obj->head.mark = 1;
+    obj->head.back = markhead;
+    markhead = obj;
+}
+
+
+int mark1(void) {
+    union object *obj;
+
+    obj = markhead;
+    if (obj == NULL) {
+        return 0;
+    }
+
+    markhead = obj->head.back;
+    switch (obj->head.tag) {
     case TAG_NIL:
         break;
     case TAG_CONS:
-        free(object);
+        mark(obj->cons.car);
+        mark(obj->cons.cdr);
         break;
     case TAG_STRING:
-        free(object->string.value);
-        free(object);
         break;
     case TAG_SYMBOL:
-        free(object);
+        mark(obj->symbol.name);
         break;
     case TAG_FIXNUM:
-        free(object);
         break;
     default:
-        die("INVALID TAG");
+        die("INVALID TAG %p", (void *)obj);
+    }
+
+    return 1;
+}
+
+
+void markroots(void) {
+}
+
+
+void collect(void) {
+    if (markhead == NULL && sweephead == NULL) {
+        markroots();
+    } else if (markhead != NULL) {
+        while (mark1());
+        sweephead = &gclist;
+    } else {
+        while (sweep1());
     }
 }
 
 
+union object *makeobj(int tag, size_t size) {
+    union object *ret;
+    ret = malloc(size);
+    if (ret == NULL) {
+        die("OUT OF MEMORY");
+    }
+    ret->head.tag = tag;
+    ret->head.mark = 0;
+    ret->head.next = gclist;
+    ret->head.back = NULL;
+    gclist = ret;
+    return ret;
+}
+
+
 union object *makenil(void) {
-    static union object ob = {{TAG_NIL}};
+    static union object ob = {{TAG_NIL, 0, NULL, NULL}};
     return &ob;
 }
 
 
 union object *makecons(union object *car, union object *cdr) {
-    struct cons *ret;
-    ret = malloc(sizeof(*ret));
-    if (ret == NULL) {
-        die("OUT OF MEMORY");
-    }
-    ret->head.tag = TAG_CONS;
-    ret->car = car;
-    ret->cdr = cdr;
-    return (union object *)ret;
+    union object *ret = NULL;
+    ret = makeobj(TAG_CONS, sizeof(ret->cons));
+    ret->cons.car = car;
+    ret->cons.cdr = cdr;
+    return ret;
 }
 
 
 union object *makestring(unsigned char *value, unsigned int length) {
-    unsigned char *buf;
-    struct string *ret;
-    ret = malloc(sizeof(*ret));
-    if (ret == NULL) {
-        die("OUT OF MEMORY");
-    }
-    buf = malloc(length);
-    if (buf == NULL) {
-        die("OUT OF MEMORY");
-    }
-    memcpy(buf, value, length);
-    ret->head.tag = TAG_STRING;
-    ret->value = buf;
-    ret->length = length;
-    return (union object *)ret;
+    union object *ret = NULL;
+    ret = makeobj(TAG_STRING, sizeof(ret->string) + length);
+    memcpy(ret + 1, value, length);
+    ret->string.value = (unsigned char *)(ret + 1);
+    ret->string.length = length;
+    return ret;
 }
 
 
 union object *makesymbol(unsigned char *name, unsigned int length) {
-    struct symbol *ret;
-    if (length == 3 && memcmp(name, "nil", 3) == 0) {
-        return makenil();
-    }
-    ret = malloc(sizeof(*ret));
-    if (ret == NULL) {
-        die("OUT OF MEMORY");
-    }
-    ret->head.tag = TAG_SYMBOL;
-    ret->name = makestring(name, length);
-    return (union object *)ret;
+    union object *ret = NULL;
+    ret = makeobj(TAG_SYMBOL, sizeof(ret->symbol));
+    ret->symbol.name = makestring(name, length);
+    return ret;
 }
 
 
 union object *makefixnum(int value) {
-    struct fixnum *ret;
-    ret = malloc(sizeof(*ret));
-    if (ret == NULL) {
-        die("OUT OF MEMORY");
+    union object *ret = NULL;
+    ret = makeobj(TAG_FIXNUM, sizeof(ret->fixnum));
+    ret->fixnum.value = value;
+    return ret;
+}
+
+
+union object *cintern(char *name) {
+    if (strcmp(name, "nil") == 0) {
+        return makenil();
     }
-    ret->head.tag = TAG_FIXNUM;
-    ret->value = value;
-    return (union object *)ret;
+    return makesymbol((unsigned char *)name, strlen(name));
 }
 
 
@@ -199,25 +267,36 @@ union object *parsetoken(unsigned char *maybeint, unsigned int length) {
     long int value;
     unsigned int i = 0;
     char buffer[32];
+
     if ((maybeint[i] == '-' || maybeint[i] == '+') && i < length) {
         i += 1;
     }
+
     while ((maybeint[i] >= '0' && maybeint[i] <= '9') && i < length) {
         i += 1;
     }
+
     if (i == length) {
         if (i >= sizeof(buffer)) {
-            die("INTEGER TOO BIG");
+            die("FIXNUM OVERFLOW");
         }
+
         memcpy(buffer, maybeint, length);
         buffer[length] = 0;
+
         errno = 0;
         value = strtol(buffer, NULL, 10);
         if (value > INT_MAX || value == LONG_MIN || errno != 0) {
             die("FIXNUM OVERFLOW");
         }
+
         return makefixnum(value);
     }
+
+    if (length == 3 && memcmp(maybeint, "nil", 3) == 0) {
+        return makenil();
+    }
+
     return makesymbol(maybeint, length);
 }
 
@@ -296,22 +375,22 @@ union object *lisp_read(int expect)
 
         case '\'':
             return makecons(
-                makesymbol((unsigned char *)"quote", 5),
+                cintern("quote"),
                 makecons(lisp_read(1), makenil())
             );
 
         case '`':
             return makecons(
-                makesymbol((unsigned char *)"quasiquote", 10),
+                cintern("quasiquote"),
                 makecons(lisp_read(1), makenil())
             );
 
         case ',':
             ch = getc(stdin);
             if (ch == '@') {
-                obj = makesymbol((unsigned char *)"unquote-splicing", 16);
+                obj = cintern("unquote-splicing");
             } else {
-                obj = makesymbol((unsigned char *)"unquote", 7);
+                obj = cintern("unquote");
                 ungetc(ch, stdin);
             }
             return makecons(obj, makecons(lisp_read(1), makenil()));
@@ -339,8 +418,7 @@ union object *lisp_read(int expect)
 
         default:
             if (!lisp_istokenchar(ch)) {
-                fprintf(stderr, "INVALID CHARACTER: %c\n", ch);
-                die("INVALID CHARACTER");
+                die("INVALID CHARACTER %c", ch);
             }
             length = 0;
             do {
@@ -362,9 +440,11 @@ int lisp_isnil(union object *object) {
     if (object == NULL) {
         die("INVALID VALUE");
     }
+
     if (object->head.tag == TAG_NIL) {
         return 1;
     }
+
     return 0;
 }
 
@@ -372,60 +452,61 @@ int lisp_isnil(union object *object) {
 void lisp_write(union object *object) {
     unsigned int i;
     int ch;
+
     if (object == NULL) {
         die("INVALID VALUE");
     }
+
     switch (object->head.tag) {
     case TAG_NIL:
-        printf("nil");
+        fputs("nil", stdout);
         break;
+
     case TAG_CONS:
-        printf("(");
+        putc('(', stdout);
         while (1) {
             lisp_write(object->cons.car);
             if (lisp_isnil(object->cons.cdr)) {
                 break;
             } else if (object->cons.cdr == NULL || object->cons.cdr->head.tag != TAG_CONS) {
-                printf(" . ");
+                fputs(" . ", stdout);
                 lisp_write(object->cons.cdr);
                 break;
             } else {
-                printf(" ");
+                putc(' ', stdout);
                 object = object->cons.cdr;
             }
         }
-        printf(")");
+        putc(')', stdout);
         break;
+
     case TAG_STRING:
-        printf("\"");
+        putc('"', stdout);
         i = 0;
         while (i < object->string.length) {
             ch = object->string.value[i];
             if (ch == '\"' || ch == '\\') {
-                printf("\\");
+                putc('\\', stdout);
             }
-            printf("%c", ch);
+            putc(ch, stdout);
             i += 1;
         }
-        printf("\"");
+        putc('"', stdout);
         break;
+
     case TAG_SYMBOL:
-        if (
-            object->symbol.name == NULL
-            || object->symbol.name->head.tag != TAG_STRING
-        ) {
-            die("INVALID SYMBOL");
-        }
         object = object->symbol.name;
         i = 0;
         while (i < object->string.length) {
-            printf("%c", object->string.value[i]);
+            putc(object->string.value[i], stdout);
             i += 1;
         }
         break;
+
     case TAG_FIXNUM:
         printf("%u", object->fixnum.value);
         break;
+
     default:
         die("INVALID TAG");
     }
@@ -447,6 +528,7 @@ int main(int argc, char **argv)
         printf("\n");
         fflush(stdout);
     }
+    collect();
 
     printf("Hello, world!\n");
     return 0;
