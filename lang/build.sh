@@ -21,6 +21,7 @@ set -ue
 : "${CHK:=cppcheck}"
 : "${SAN:=valgrind}"
 
+: "${DEPENDS:=source.lisp}"
 : "${SOURCES:=main.c}"
 : "${TARGET:=main.out}"
 
@@ -31,11 +32,11 @@ set -ue
 build() {
     ${CHK} ${CHKFLAGS} ${SOURCES}
     ${CC} ${CFLAGS} -o "${TARGET}" ${SOURCES}
-    ${SAN} "./${TARGET}"
+    ${SAN} "./${TARGET}" < check.lisp
 }
 
 query() {
-    find ${SOURCES} -printf '%Ts\n' | sort -nr | head -n1
+    find ${SOURCES} ${DEPENDS} -printf '%Ts\n' | sort -nr | head -n1
 }
 
 usage() {
