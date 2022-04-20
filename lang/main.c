@@ -72,6 +72,10 @@ enum tag {
 };
 
 
+struct lispval;
+typedef struct lispval *lispval_t;
+
+
 struct obhead {
     int tag;
     int mark;
@@ -82,8 +86,8 @@ struct obhead {
 
 struct cons {
     struct obhead head;
-    union object *car;
-    union object *cdr;
+    lispval_t car;
+    lispval_t cdr;
 };
 
 
@@ -96,7 +100,7 @@ struct string {
 
 struct symbol {
     struct obhead head;
-    union object *name;
+    lispval_t name;
 };
 
 
@@ -119,7 +123,8 @@ struct lisp_global {
     union object *objs;
     union object *markhead;
     union object **sweephead;
-    union object nil;
+    union object onil;
+    lispval_t nil;
     unsigned int nyoung;
     unsigned int nold;
 };
@@ -134,10 +139,11 @@ struct lisp_global *makeglobal(void) {
     g->objs = NULL;
     g->markhead = NULL;
     g->sweephead = NULL;
-    g->nil.head.tag = TAG_NIL;
-    g->nil.head.mark = 0;
-    g->nil.head.next = NULL;
-    g->nil.head.back = NULL;
+    g->onil.head.tag = TAG_NIL;
+    g->onil.head.mark = 0;
+    g->onil.head.next = NULL;
+    g->onil.head.back = NULL;
+    g->nil = (lispval_t)&g->onil;
     g->nyoung = 0;
     g->nold = 0;
     return g;
@@ -162,22 +168,20 @@ void sweep1(struct lisp_global *g) {
 }
 
 
-void mark(struct lisp_global *g, union object *obj) {
-    if (obj->head.mark != 0) {
+void mark(struct lisp_global *g, lispval_t x) {
+    union object *o = (union object *)x;
+    if (o->head.mark != TAG_NIL) {
         return;
     }
-    obj->head.mark = 1;
-    obj->head.back = g->markhead;
-    g->markhead = obj;
+    o->head.mark = 1;
+    o->head.back = g->markhead;
+    g->markhead = o;
 }
 
 
 void mark1(struct lisp_global *g) {
     union object *obj;
     obj = g->markhead;
-    if (obj == NULL) {
-        return;
-    }
     g->markhead = obj->head.back;
     switch (obj->head.tag) {
     case TAG_NIL:
@@ -249,57 +253,143 @@ union object *makeobj(struct lisp_global *g, int tag, size_t size) {
 }
 
 
-union object *makenil(struct lisp_global *g) {
-    return &g->nil;
-}
-
-
-union object *makecons(struct lisp_global *g, union object *car, union object *cdr) {
+lispval_t makecons(struct lisp_global *g, lispval_t a, lispval_t d) {
     union object *ret = NULL;
     ret = makeobj(g, TAG_CONS, sizeof(ret->cons));
-    ret->cons.car = car;
-    ret->cons.cdr = cdr;
-    return ret;
+    ret->cons.car = a;
+    ret->cons.cdr = d;
+    return (lispval_t)ret;
 }
 
 
-union object *makestring(struct lisp_global *g, unsigned char *value, unsigned int length) {
+void rplaca(struct lisp_global *g, lispval_t c, lispval_t x) {
+    union object *o;
+    (void) g;
+    o = (void *)c;
+    if (o->head.tag != TAG_CONS) {
+        die("EXPECTED CONS");
+    }
+    o->cons.car = x;
+}
+
+
+void rplacd(struct lisp_global *g, lispval_t c, lispval_t x) {
+    union object *o;
+    (void) g;
+    o = (void *)c;
+    if (o->head.tag != TAG_CONS) {
+        die("EXPECTED CONS");
+    }
+    o->cons.cdr = x;
+}
+
+
+lispval_t car(struct lisp_global *g, lispval_t c) {
+    union object *o;
+    (void) g;
+    o = (void *)c;
+    if (o->head.tag != TAG_CONS) {
+        die("EXPECTED CONS");
+    }
+    return o->cons.car;
+}
+
+
+lispval_t cdr(struct lisp_global *g, lispval_t c) {
+    union object *o;
+    (void) g;
+    o = (void *)c;
+    if (o->head.tag != TAG_CONS) {
+        die("EXPECTED CONS");
+    }
+    return o->cons.cdr;
+}
+
+
+lispval_t makestring(struct lisp_global *g, unsigned char *value, int length) {
     union object *ret = NULL;
     ret = makeobj(g, TAG_STRING, sizeof(ret->string) + length);
-    memcpy(ret + 1, value, length);
+    memset(ret + 1, 0, length);
+    if (value != NULL) {
+        memcpy(ret + 1, value, length);
+    }
     ret->string.value = (unsigned char *)(ret + 1);
     ret->string.length = length;
-    return ret;
+    return (lispval_t)ret;
 }
 
 
-union object *makesymbol(struct lisp_global *g, unsigned char *name, unsigned int length) {
+int lisp_strlen(struct lisp_global *g, lispval_t x) {
+    union object *o;
+    (void) g;
+    o = (void *)x;
+    if (o->head.tag != TAG_STRING) {
+        die("EXPECTED STRING");
+    }
+    return o->string.length;
+}
+
+
+unsigned char *lisp_str(struct lisp_global *g, lispval_t x) {
+    union object *o;
+    (void) g;
+    o = (void *)x;
+    if (o->head.tag != TAG_STRING) {
+        die("EXPECTED STRING");
+    }
+    return o->string.value;
+}
+
+
+lispval_t makesymbol(struct lisp_global *g, unsigned char *name, int length) {
     union object *ret = NULL;
     ret = makeobj(g, TAG_SYMBOL, sizeof(ret->symbol));
     ret->symbol.name = makestring(g, name, length);
-    return ret;
+    return (lispval_t)ret;
 }
 
 
-union object *makefixnum(struct lisp_global *g, int value) {
+lispval_t lisp_name(struct lisp_global *g, lispval_t x) {
+    union object *o;
+    (void) g;
+    o = (void *)x;
+    if (o->head.tag != TAG_SYMBOL) {
+        die("EXPECTED SYMBOL");
+    }
+    return o->symbol.name;
+}
+
+
+lispval_t makefixnum(struct lisp_global *g, int value) {
     union object *ret = NULL;
     ret = makeobj(g, TAG_FIXNUM, sizeof(ret->fixnum));
     ret->fixnum.value = value;
-    return ret;
+    return (lispval_t)ret;
 }
 
 
-union object *cintern(struct lisp_global *g, char *name) {
+int lisp_fixnum(struct lisp_global *g, lispval_t x) {
+    union object *o;
+    (void) g;
+    o = (void *)x;
+    if (o->head.tag != TAG_FIXNUM) {
+        die("EXPECTED FIXNUM");
+    }
+    return o->fixnum.value;
+}
+
+
+lispval_t cintern(struct lisp_global *g, char *name) {
     if (strcmp(name, "nil") == 0) {
-        return makenil(g);
+        return g->nil;
     }
     return makesymbol(g, (unsigned char *)name, strlen(name));
 }
 
 
-union object *parsetoken(struct lisp_global *g, unsigned char *maybeint, unsigned int length) {
+lispval_t parsetoken(struct lisp_global *g, unsigned char *maybeint, int length) {
     long int value;
-    unsigned int i = 0;
+    int i = 0;
     char buffer[32];
 
     if ((maybeint[i] == '-' || maybeint[i] == '+') && i < length) {
@@ -311,7 +401,7 @@ union object *parsetoken(struct lisp_global *g, unsigned char *maybeint, unsigne
     }
 
     if (i == length) {
-        if (i >= sizeof(buffer)) {
+        if (i >= (int)sizeof(buffer)) {
             die("FIXNUM OVERFLOW");
         }
 
@@ -320,7 +410,7 @@ union object *parsetoken(struct lisp_global *g, unsigned char *maybeint, unsigne
 
         errno = 0;
         value = strtol(buffer, NULL, 10);
-        if (value > INT_MAX || value == LONG_MIN || errno != 0) {
+        if (value > INT_MAX || value < INT_MIN || errno != 0) {
             die("FIXNUM OVERFLOW");
         }
 
@@ -328,7 +418,7 @@ union object *parsetoken(struct lisp_global *g, unsigned char *maybeint, unsigne
     }
 
     if (length == 3 && memcmp(maybeint, "nil", 3) == 0) {
-        return makenil(g);
+        return g->nil;
     }
 
     return makesymbol(g, maybeint, length);
@@ -357,12 +447,12 @@ int munch_whitespace(FILE *file)
 }
 
 
-union object *lisp_read(struct lisp_global *g, int expect)
+lispval_t lisp_read(struct lisp_global *g, int expect)
 {
     int ch;
-    unsigned int length;
+    int length;
     static unsigned char scratch[4098];  /* DEFECT */
-    union object *obj, *tail;
+    lispval_t obj, tail;
 
     while (1) {
         ch = munch_whitespace(stdin);
@@ -377,29 +467,29 @@ union object *lisp_read(struct lisp_global *g, int expect)
         case '(':
             ch = munch_whitespace(stdin);
             if (ch == ')') {
-                return makenil(g);
+                return g->nil;
             }
 
-            obj = makecons(g, makenil(g), makenil(g));
+            obj = makecons(g, g->nil, g->nil);
             tail = obj;
 
             while (1) {
                 ungetc(ch, stdin);
-                tail->cons.car = lisp_read(g, 1);
+                rplaca(g, tail, lisp_read(g, 1));
 
                 ch = munch_whitespace(stdin);
                 if (ch == ')') {
                     return obj;
                 } else if (ch == '.') {
-                    tail->cons.cdr = lisp_read(g, 1);
+                    rplacd(g, tail, lisp_read(g, 1));
                     ch = munch_whitespace(stdin);
                     if (ch != ')') {
                         die("EXPECTED ) AFTER CDR VALUE");
                     }
                     return obj;
                 } else {
-                    tail->cons.cdr = makecons(g, makenil(g), makenil(g));
-                    tail = tail->cons.cdr;
+                    rplacd(g, tail, makecons(g, g->nil, g->nil));
+                    tail = cdr(g, tail);
                 }
             }
 
@@ -408,18 +498,10 @@ union object *lisp_read(struct lisp_global *g, int expect)
             break;
 
         case '\'':
-            return makecons(
-                g,
-                cintern(g, "quote"),
-                makecons(g, lisp_read(g, 1), makenil(g))
-            );
+            return makecons(g, cintern(g, "quote"), makecons(g, lisp_read(g, 1), g->nil));
 
         case '`':
-            return makecons(
-                g,
-                cintern(g, "quasiquote"),
-                makecons(g, lisp_read(g, 1), makenil(g))
-            );
+            return makecons(g, cintern(g, "quasiquote"), makecons(g, lisp_read(g, 1), g->nil));
 
         case ',':
             ch = getc(stdin);
@@ -429,7 +511,7 @@ union object *lisp_read(struct lisp_global *g, int expect)
                 obj = cintern(g, "unquote");
                 ungetc(ch, stdin);
             }
-            return makecons(g, obj, makecons(g, lisp_read(g, 1), makenil(g)));
+            return makecons(g, obj, makecons(g, lisp_read(g, 1), g->nil));
 
         case '"':
             length = 0;
@@ -444,7 +526,7 @@ union object *lisp_read(struct lisp_global *g, int expect)
                 if (ch == EOF) {
                     die("EXPECTED \" GOT END OF FILE");
                 }
-                if (length >= sizeof(scratch)) {
+                if (length >= (int)sizeof(scratch)) {
                     die("TOKEN TOO LONG");
                 }
                 scratch[length] = ch;
@@ -458,7 +540,7 @@ union object *lisp_read(struct lisp_global *g, int expect)
             }
             length = 0;
             do {
-                if (length >= sizeof(scratch)) {
+                if (length >= (int)sizeof(scratch)) {
                     die("TOKEN TOO LONG");
                 }
                 scratch[length] = ch;
@@ -472,30 +554,20 @@ union object *lisp_read(struct lisp_global *g, int expect)
 }
 
 
-int lisp_isnil(union object *object) {
-    if (object == NULL) {
-        die("INVALID VALUE");
-    }
-
-    if (object->head.tag == TAG_NIL) {
-        return 1;
-    }
-
-    return 0;
+int lisp_tag(lispval_t x) {
+    return ((union object *)x)->head.tag;
 }
 
 
-void lisp_write(struct lisp_global *g, union object *object) {
-    unsigned int i;
+void lisp_write(struct lisp_global *g, lispval_t x) {
+    lispval_t a, d;
+    unsigned char *s;
+    int i;
+    int length;
     int ch;
-
     (void)g;
 
-    if (object == NULL) {
-        die("INVALID VALUE");
-    }
-
-    switch (object->head.tag) {
+    switch (lisp_tag(x)) {
     case TAG_NIL:
         fputs("nil", stdout);
         break;
@@ -503,16 +575,18 @@ void lisp_write(struct lisp_global *g, union object *object) {
     case TAG_CONS:
         putc('(', stdout);
         while (1) {
-            lisp_write(g, object->cons.car);
-            if (lisp_isnil(object->cons.cdr)) {
+            a = car(g, x);
+            d = cdr(g, x);
+            lisp_write(g, a);
+            if (lisp_tag(d) == TAG_NIL) {
                 break;
-            } else if (object->cons.cdr == NULL || object->cons.cdr->head.tag != TAG_CONS) {
+            } else if (d == NULL || lisp_tag(d) != TAG_CONS) {
                 fputs(" . ", stdout);
-                lisp_write(g, object->cons.cdr);
+                lisp_write(g, d);
                 break;
             } else {
                 putc(' ', stdout);
-                object = object->cons.cdr;
+                x = d;
             }
         }
         putc(')', stdout);
@@ -520,9 +594,11 @@ void lisp_write(struct lisp_global *g, union object *object) {
 
     case TAG_STRING:
         putc('"', stdout);
+        length = lisp_strlen(g, x);
+        s = lisp_str(g, x);
         i = 0;
-        while (i < object->string.length) {
-            ch = object->string.value[i];
+        while (i < length) {
+            ch = s[i];
             if (ch == '\"' || ch == '\\') {
                 putc('\\', stdout);
             }
@@ -533,16 +609,18 @@ void lisp_write(struct lisp_global *g, union object *object) {
         break;
 
     case TAG_SYMBOL:
-        object = object->symbol.name;
+        x = lisp_name(g, x);
+        length = lisp_strlen(g, x);
+        s = lisp_str(g, x);
         i = 0;
-        while (i < object->string.length) {
-            putc(object->string.value[i], stdout);
+        while (i < length) {
+            putc(s[i], stdout);
             i += 1;
         }
         break;
 
     case TAG_FIXNUM:
-        printf("%u", object->fixnum.value);
+        printf("%u", lisp_fixnum(g, x));
         break;
 
     default:
@@ -554,17 +632,17 @@ void lisp_write(struct lisp_global *g, union object *object) {
 int main(int argc, char **argv)
 {
     struct lisp_global *g;
-    union object *value;
+    lispval_t x;
     (void)argc;
     (void)argv;
 
     g = makeglobal();
     while (1) {
-        value = lisp_read(g, 0);
-        if (value == NULL) {
+        x = lisp_read(g, 0);
+        if (x == NULL) {
             break;
         }
-        lisp_write(g, value);
+        lisp_write(g, x);
         printf("\n");
         fflush(stdout);
     }
