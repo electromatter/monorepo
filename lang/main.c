@@ -96,8 +96,10 @@ struct cons {
 
 struct string {
     struct obhead head;
+    lispval_t extend;
     unsigned char *value;
     int length;
+    int capacity;
 };
 
 
@@ -184,7 +186,7 @@ void sweep1(struct lisp_global *g) {
         g->nold += 1;
     } else {
         *g->sweep = obj->head.next;
-        free(obj);
+        /*free(obj);*/
     }
 }
 
@@ -341,16 +343,31 @@ lispval_t cdr(struct lisp_global *g, lispval_t c) {
 }
 
 
-lispval_t makestring(struct lisp_global *g, const unsigned char *s, int n) {
+lispval_t makestring(struct lisp_global *g, int cap) {
     union object *ret = NULL;
-    ret = makeobj(g, TAG_STRING, sizeof(ret->string) + n);
-    memset(&ret->string + 1, 0, n);
-    if (s != NULL) {
-        memcpy(&ret->string + 1, s, n);
+    if (cap < VEC_MIN_SIZE) {
+        cap = VEC_MIN_SIZE;
     }
+    ret = makeobj(g, TAG_STRING, sizeof(ret->string) + cap);
+    memset(&ret->string + 1, 0, cap);
+    ret->string.extend = g->nil;
     ret->string.value = (unsigned char *)(&ret->string + 1);
-    ret->string.length = n;
+    ret->string.capacity = cap;
+    ret->string.length = 0;
     return (lispval_t)ret;
+}
+
+
+int lisp_strcap(struct lisp_global *g, lispval_t x) {
+    union object *o;
+    o = (union object *)x;
+    if (o->head.tag != TAG_STRING) {
+        die("EXPECTED STRING");
+    }
+    if (o->string.extend != g->nil) {
+        o = (union object *)o->string.extend;
+    }
+    return o->string.capacity;
 }
 
 
@@ -362,6 +379,44 @@ int lisp_strlen(struct lisp_global *g, lispval_t x) {
         die("EXPECTED STRING");
     }
     return o->string.length;
+}
+
+
+void lisp_strextend(struct lisp_global *g, lispval_t x) {
+    union object *o;
+    union object *e;
+    int i;
+    int cap;
+    o = (union object *)x;
+    if (o->head.tag != TAG_STRING) {
+        die("EXPECTED STRING");
+    }
+    cap = lisp_strcap(g, x);
+    if (cap > INT_MAX / 2) {
+        die("STRING TOO LARGE");
+    }
+    e = (union object *)makestring(g, cap * 2);
+    for (i = 0; i < cap; i++) {
+        e->string.value[i] = o->string.value[i];
+    }
+    o->string.extend = (lispval_t)e;
+    o->string.value = e->string.value;
+}
+
+
+void lisp_strpush(struct lisp_global *g, lispval_t x, int ch) {
+    union object *o;
+    int cap;
+    o = (union object *)x;
+    if (o->head.tag != TAG_STRING) {
+        die("EXPECTED STRING");
+    }
+    cap = lisp_strcap(g, x);
+    if (o->string.length == cap) {
+        lisp_strextend(g, x);
+    }
+    o->string.value[o->string.length] = ch;
+    o->string.length += 1;
 }
 
 
@@ -378,8 +433,12 @@ unsigned char *lisp_str(struct lisp_global *g, lispval_t x) {
 
 lispval_t makesymbol(struct lisp_global *g, const unsigned char *s, int n) {
     union object *ret = NULL;
+    union object *str = NULL;
     ret = makeobj(g, TAG_SYMBOL, sizeof(ret->symbol));
-    ret->symbol.name = makestring(g, s, n);
+    str = (union object *)makestring(g, n);
+    ret->symbol.name = (lispval_t)str;
+    memcpy(str->string.value, s, n);
+    str->string.length = n;
     return (lispval_t)ret;
 }
 
@@ -493,6 +552,15 @@ void lisp_vecpush(struct lisp_global *g, lispval_t v, lispval_t a) {
 }
 
 
+lispval_t makehashtbl(struct lisp_global *g) {
+    union object *ret = NULL;
+    ret = makeobj(g, TAG_HASHTBL, sizeof(ret->fixnum));
+    ret->hashtbl.keyv = g->nil;
+    ret->hashtbl.valv = g->nil;
+    return (lispval_t)ret;
+}
+
+
 lispval_t lisp_name(struct lisp_global *g, lispval_t x) {
     union object *o;
     (void) g;
@@ -531,10 +599,15 @@ lispval_t cintern(struct lisp_global *g, const char *name) {
 }
 
 
-lispval_t parsetoken(struct lisp_global *g, unsigned char *s, int length) {
+lispval_t parsetoken(struct lisp_global *g, lispval_t str) {
     long int value;
     int i = 0;
+    int length;
+    unsigned char *s;
     char buffer[32];
+
+    length = lisp_strlen(g, str);
+    s = lisp_str(g, str);
 
     if (i < length && (s[i] == '-' || s[i] == '+')) {
         i += 1;
@@ -594,9 +667,9 @@ int munch_whitespace(FILE *file)
 lispval_t lisp_read(struct lisp_global *g, int expect)
 {
     int ch;
-    int length;
-    static unsigned char scratch[4098];  /* DEFECT */
-    lispval_t obj, tail;
+    lispval_t obj;
+    lispval_t tail;
+    lispval_t token;
 
     while (1) {
         ch = munch_whitespace(stdin);
@@ -658,7 +731,7 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
             return makecons(g, obj, makecons(g, lisp_read(g, 1), g->nil));
 
         case '"':
-            length = 0;
+            token = makestring(g, 0);
             while (1) {
                 ch = getc(stdin);
                 if (ch == '"') {
@@ -670,29 +743,21 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
                 if (ch == EOF) {
                     die("EXPECTED \" GOT END OF FILE");
                 }
-                if (length >= (int)sizeof(scratch)) {
-                    die("TOKEN TOO LONG");
-                }
-                scratch[length] = ch;
-                length += 1;
+                lisp_strpush(g, token, ch);
             }
-            return makestring(g, scratch, length);
+            return token;
 
         default:
             if (!lisp_istokenchar(ch)) {
                 die("INVALID CHARACTER %c", ch);
             }
-            length = 0;
+            token = makestring(g, 0);
             do {
-                if (length >= (int)sizeof(scratch)) {
-                    die("TOKEN TOO LONG");
-                }
-                scratch[length] = ch;
-                length += 1;
+                lisp_strpush(g, token, ch);
                 ch = getc(stdin);
             } while (lisp_istokenchar(ch));
             ungetc(ch, stdin);
-            return parsetoken(g, scratch, length);
+            return parsetoken(g, token);
         }
     }
 }
