@@ -96,11 +96,8 @@ struct cons {
 
 struct string {
     struct obhead head;
-    lispval_t extend;
     unsigned char *value;
-    unsigned int hash;
     int length;
-    int capacity;
 };
 
 
@@ -347,15 +344,12 @@ lispval_t cdr(struct lisp_global *g, lispval_t c) {
 lispval_t makestring(struct lisp_global *g, const unsigned char *s, int n) {
     union object *ret = NULL;
     ret = makeobj(g, TAG_STRING, sizeof(ret->string) + n);
-    memset(ret + 1, 0, n);
+    memset(&ret->string + 1, 0, n);
     if (s != NULL) {
-        memcpy(ret + 1, s, n);
+        memcpy(&ret->string + 1, s, n);
     }
-    ret->string.extend = g->nil;
-    ret->string.value = (unsigned char *)(ret + 1);
-    ret->string.hash = 0;
+    ret->string.value = (unsigned char *)(&ret->string + 1);
     ret->string.length = n;
-    ret->string.capacity = n;
     return (lispval_t)ret;
 }
 
@@ -400,17 +394,17 @@ lispval_t makevector(struct lisp_global *g, int cap) {
     ret->vector.length = 0;
     ret->vector.capacity = cap;
     ret->vector.extend = g->nil;
-    ret->vector.slots = (lispval_t *)(ret + 1);
+    ret->vector.slots = (lispval_t *)(&ret->vector + 1);
     for (i = 0; i < cap; i++)
         ret->vector.slots[i] = g->nil;
     return (lispval_t)ret;
 }
 
 
-int lisp_veclen(struct lisp_global *g, lispval_t x) {
+int lisp_veclen(struct lisp_global *g, lispval_t v) {
     union object *o;
     (void) g;
-    o = (union object *)x;
+    o = (union object *)v;
     if (o->head.tag != TAG_VECTOR) {
         die("EXPECTED VECTOR");
     }
@@ -418,10 +412,10 @@ int lisp_veclen(struct lisp_global *g, lispval_t x) {
 }
 
 
-int lisp_veccap(struct lisp_global *g, lispval_t x) {
+int lisp_veccap(struct lisp_global *g, lispval_t v) {
     union object *o;
     (void) g;
-    o = (union object *)x;
+    o = (union object *)v;
     if (o->head.tag != TAG_VECTOR) {
         die("EXPECTED VECTOR");
     }
@@ -432,28 +426,30 @@ int lisp_veccap(struct lisp_global *g, lispval_t x) {
 }
 
 
-lispval_t lisp_vecelt(struct lisp_global *g, lispval_t x, int i) {
+lispval_t lisp_vecelt(struct lisp_global *g, lispval_t v, int i) {
     union object *o;
-    (void) g;
-    o = (union object *)x;
+    int cap;
+    o = (union object *)v;
     if (o->head.tag != TAG_VECTOR) {
         die("EXPECTED VECTOR");
     }
-    if (i < 0 || i >= o->vector.capacity) {
+    cap = lisp_veccap(g, v);
+    if (i < 0 || i > cap) {
         die("OUT OF BOUNDS");
     }
     return o->vector.slots[i];
 }
 
 
-void lisp_vecset(struct lisp_global *g, lispval_t x, int i, lispval_t a) {
+void lisp_vecset(struct lisp_global *g, lispval_t v, int i, lispval_t a) {
     union object *o;
-    (void) g;
-    o = (union object *)x;
+    int cap;
+    o = (union object *)v;
     if (o->head.tag != TAG_VECTOR) {
         die("EXPECTED VECTOR");
     }
-    if (i < 0 || i >= o->vector.capacity) {
+    cap = lisp_veccap(g, v);
+    if (i < 0 || i > cap) {
         die("OUT OF BOUNDS");
     }
     o->vector.slots[i] = a;
@@ -461,9 +457,34 @@ void lisp_vecset(struct lisp_global *g, lispval_t x, int i, lispval_t a) {
 
 
 void lisp_vecpush(struct lisp_global *g, lispval_t v, lispval_t a) {
-    (void) v;
-    (void) a;
-    (void) g;
+    union object *o;
+    int i;
+    int len;
+    int cap;
+    lispval_t e;
+    lispval_t *eslots;
+    o = (union object *)v;
+    if (o->head.tag != TAG_VECTOR) {
+        die("EXPECTED VECTOR");
+    }
+    len = o->vector.length;
+    cap = lisp_veccap(g, v);
+    if (len < 0 || len > cap) {
+        die("OUT OF BOUNDS");
+    }
+    if (len == cap) {
+        if (cap >= INT_MAX / 2) {
+            die("VECTOR TOO LONG");
+        }
+        e = makevector(g, cap * 2);
+        eslots = ((union object *)e)->vector.slots;
+        for (i = 0; i < cap; i++) {
+            eslots[i] = o->vector.slots[i];
+        }
+        o->vector.extend = e;
+        o->vector.slots = eslots;
+    }
+    o->vector.slots[len] = a;
 }
 
 
