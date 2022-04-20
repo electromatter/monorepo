@@ -121,8 +121,8 @@ union object {
 
 struct lisp_global {
     union object *objs;
-    union object *markhead;
-    union object **sweephead;
+    union object *mark;
+    union object **sweep;
     union object onil;
     lispval_t nil;
     unsigned int nyoung;
@@ -137,8 +137,8 @@ struct lisp_global *makeglobal(void) {
         die("OUT OF MEMORY");
     }
     g->objs = NULL;
-    g->markhead = NULL;
-    g->sweephead = NULL;
+    g->mark = NULL;
+    g->sweep = NULL;
     g->onil.head.tag = TAG_NIL;
     g->onil.head.mark = 0;
     g->onil.head.next = NULL;
@@ -152,17 +152,17 @@ struct lisp_global *makeglobal(void) {
 
 void sweep1(struct lisp_global *g) {
     union object *obj;
-    obj = *g->sweephead;
+    obj = *g->sweep;
     if (obj == NULL) {
-        g->sweephead = NULL;
+        g->sweep = NULL;
         return;
     }
     if (obj->head.mark) {
         obj->head.mark = 0;
-        g->sweephead = &obj->head.next;
+        g->sweep = &obj->head.next;
         g->nold += 1;
     } else {
-        *g->sweephead = obj->head.next;
+        *g->sweep = obj->head.next;
         free(obj);
     }
 }
@@ -174,15 +174,15 @@ void mark(struct lisp_global *g, lispval_t x) {
         return;
     }
     o->head.mark = 1;
-    o->head.back = g->markhead;
-    g->markhead = o;
+    o->head.back = g->mark;
+    g->mark = o;
 }
 
 
 void mark1(struct lisp_global *g) {
     union object *obj;
-    obj = g->markhead;
-    g->markhead = obj->head.back;
+    obj = g->mark;
+    g->mark = obj->head.back;
     switch (obj->head.tag) {
     case TAG_NIL:
         break;
@@ -211,19 +211,20 @@ void markroots(struct lisp_global *g) {
 void collect(struct lisp_global *g, int full) {
     unsigned int i;
 
-    if (g->sweephead == NULL) {
+    if (g->sweep == NULL) {
         if (full == 0 && (g->nyoung < g->nold || g->nyoung < GC_MIN_BATCH)) {
             return;
         }
 
-        g->sweephead = &g->objs;
+        g->sweep = &g->objs;
         g->nold = 0;
         g->nyoung = 0;
+
         markroots(g);
     }
 
-    for (i = 0; (full != 0 || i < GC_MAX_BATCH) && g->sweephead == NULL; i++) {
-        if (g->markhead != NULL) {
+    for (i = 0; (full != 0 || i < GC_MAX_BATCH) && g->sweep != NULL; i++) {
+        if (g->mark != NULL) {
             mark1(g);
         } else {
             sweep1(g);
@@ -389,16 +390,16 @@ lispval_t cintern(struct lisp_global *g, char *name) {
 }
 
 
-lispval_t parsetoken(struct lisp_global *g, unsigned char *maybeint, int length) {
+lispval_t parsetoken(struct lisp_global *g, unsigned char *s, int length) {
     long int value;
     int i = 0;
     char buffer[32];
 
-    if ((maybeint[i] == '-' || maybeint[i] == '+') && i < length) {
+    if (i < length && (s[i] == '-' || s[i] == '+')) {
         i += 1;
     }
 
-    while ((maybeint[i] >= '0' && maybeint[i] <= '9') && i < length) {
+    while (i < length && (s[i] >= '0' && s[i] <= '9')) {
         i += 1;
     }
 
@@ -407,7 +408,7 @@ lispval_t parsetoken(struct lisp_global *g, unsigned char *maybeint, int length)
             die("FIXNUM OVERFLOW");
         }
 
-        memcpy(buffer, maybeint, length);
+        memcpy(buffer, s, length);
         buffer[length] = 0;
 
         errno = 0;
@@ -419,11 +420,11 @@ lispval_t parsetoken(struct lisp_global *g, unsigned char *maybeint, int length)
         return makefixnum(g, value);
     }
 
-    if (length == 3 && memcmp(maybeint, "nil", 3) == 0) {
+    if (length == 3 && memcmp(s, "nil", 3) == 0) {
         return g->nil;
     }
 
-    return makesymbol(g, maybeint, length);
+    return makesymbol(g, s, length);
 }
 
 
