@@ -631,15 +631,8 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
 }
 
 
-int main(int argc, char **argv)
-{
-    struct lisp_global *g;
+void repl(struct lisp_global *g) {
     lispval_t x;
-    (void)argc;
-    (void)argv;
-
-    g = makeglobal();
-
     while (1) {
         x = lisp_read(g, 0);
         if (x == NULL) {
@@ -649,7 +642,16 @@ int main(int argc, char **argv)
         printf("\n");
         fflush(stdout);
     }
+}
 
+
+int main(int argc, char **argv) {
+    struct lisp_global *g;
+    (void)argc;
+    (void)argv;
+
+    g = makeglobal();
+    repl(g);
     freeglobal(g);
     return 0;
 }
