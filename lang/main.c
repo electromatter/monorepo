@@ -22,6 +22,7 @@
 #include <string.h>
 
 
+#define GC_MIN_BATCH    (100)
 #define GC_MAX_BATCH    (10000)
 
 
@@ -131,6 +132,7 @@ void sweep1(void) {
     if (obj->head.mark) {
         obj->head.mark = 0;
         sweephead = &obj->head.next;
+        oldcount += 1;
     } else {
         *sweephead = obj->head.next;
         free(obj);
@@ -182,7 +184,7 @@ void markroots(void) {
 void collect(int full) {
     unsigned int i;
 
-    if (!full && youngcount < oldcount) {
+    if (!full && (youngcount < oldcount || youngcount < GC_MIN_BATCH)) {
         return;
     }
 
@@ -193,9 +195,14 @@ void collect(int full) {
     for (i = 0; full || (i < GC_MAX_BATCH); i++) {
         if (markhead != NULL) {
             mark1();
+            if (markhead == NULL) {
+                sweephead = &gclist;
+                oldcount = 0;
+            }
         } else if (sweephead != NULL) {
             sweep1();
         } else {
+            youngcount = 0;
             return;
         }
     }
