@@ -211,28 +211,30 @@ void markroots(struct lisp_global *g) {
 void collect(struct lisp_global *g, int full) {
     unsigned int i;
 
-    if (!full && (g->nyoung < g->nold || g->nyoung < GC_MIN_BATCH)) {
-        return;
-    }
+    if (g->sweephead == NULL) {
+        if (full == 0 && (g->nyoung < g->nold || g->nyoung < GC_MIN_BATCH)) {
+            return;
+        }
 
-    if (g->markhead == NULL && g->sweephead == NULL) {
+        g->sweephead = &g->objs;
+        g->nold = 0;
+        g->nyoung = 0;
         markroots(g);
     }
 
-    for (i = 0; full || (i < GC_MAX_BATCH); i++) {
+    for (i = 0; (full != 0 || i < GC_MAX_BATCH) && g->sweephead == NULL; i++) {
         if (g->markhead != NULL) {
             mark1(g);
-            if (g->markhead == NULL) {
-                g->sweephead = &g->objs;
-                g->nold = 0;
-            }
-        } else if (g->sweephead != NULL) {
-            sweep1(g);
         } else {
-            g->nyoung = 0;
-            return;
+            sweep1(g);
         }
     }
+}
+
+
+void freeglobal(struct lisp_global *g) {
+    collect(g, 1);
+    free(g);
 }
 
 
@@ -620,7 +622,7 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
         break;
 
     case TAG_FIXNUM:
-        printf("%u", lisp_fixnum(g, x));
+        printf("%d", lisp_fixnum(g, x));
         break;
 
     default:
@@ -637,6 +639,7 @@ int main(int argc, char **argv)
     (void)argv;
 
     g = makeglobal();
+
     while (1) {
         x = lisp_read(g, 0);
         if (x == NULL) {
@@ -646,8 +649,7 @@ int main(int argc, char **argv)
         printf("\n");
         fflush(stdout);
     }
-    collect(g, 1);
 
-    printf("Hello, world!\n");
+    freeglobal(g);
     return 0;
 }
