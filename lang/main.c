@@ -456,35 +456,40 @@ void lisp_vecset(struct lisp_global *g, lispval_t v, int i, lispval_t a) {
 }
 
 
+void lisp_vecextend(struct lisp_global *g, lispval_t v) {
+    union object *o;
+    union object *e;
+    int i;
+    int cap;
+    o = (union object *)v;
+    cap = lisp_veccap(g, v);
+    if (cap > INT_MAX / 2) {
+        die("VECTOR TOO LARGE");
+    }
+    e = (union object *)makevector(g, cap * 2);
+    for (i = 0; i < cap; i++) {
+        e->vector.slots[i] = o->vector.slots[i];
+    }
+    o->vector.extend = (lispval_t)e;
+    o->vector.slots = e->vector.slots;
+}
+
+
 void lisp_vecpush(struct lisp_global *g, lispval_t v, lispval_t a) {
     union object *o;
-    int i;
     int len;
     int cap;
-    lispval_t e;
-    lispval_t *eslots;
     o = (union object *)v;
     if (o->head.tag != TAG_VECTOR) {
         die("EXPECTED VECTOR");
     }
     len = o->vector.length;
     cap = lisp_veccap(g, v);
-    if (len < 0 || len > cap) {
-        die("OUT OF BOUNDS");
-    }
     if (len == cap) {
-        if (cap >= INT_MAX / 2) {
-            die("VECTOR TOO LONG");
-        }
-        e = makevector(g, cap * 2);
-        eslots = ((union object *)e)->vector.slots;
-        for (i = 0; i < cap; i++) {
-            eslots[i] = o->vector.slots[i];
-        }
-        o->vector.extend = e;
-        o->vector.slots = eslots;
+        lisp_vecextend(g, v);
     }
     o->vector.slots[len] = a;
+    o->vector.length += 1;
 }
 
 
