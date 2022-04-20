@@ -115,59 +115,81 @@ union object {
 };
 
 
-union object *gclist = NULL;
-union object *markhead = NULL;
-union object **sweephead = NULL;
-unsigned int youngcount = 0;
-unsigned int oldcount = 0;
+struct lisp_global {
+    union object *objs;
+    union object *markhead;
+    union object **sweephead;
+    union object nil;
+    unsigned int nyoung;
+    unsigned int nold;
+};
 
 
-void sweep1(void) {
+struct lisp_global *makeglobal(void) {
+    struct lisp_global *g;
+    g = malloc(sizeof(*g));
+    if (g == NULL) {
+        die("OUT OF MEMORY");
+    }
+    g->objs = NULL;
+    g->markhead = NULL;
+    g->sweephead = NULL;
+    g->nil.head.tag = TAG_NIL;
+    g->nil.head.mark = 0;
+    g->nil.head.next = NULL;
+    g->nil.head.back = NULL;
+    g->nyoung = 0;
+    g->nold = 0;
+    return g;
+}
+
+
+void sweep1(struct lisp_global *g) {
     union object *obj;
-    obj = *sweephead;
+    obj = *g->sweephead;
     if (obj == NULL) {
-        sweephead = NULL;
+        g->sweephead = NULL;
         return;
     }
     if (obj->head.mark) {
         obj->head.mark = 0;
-        sweephead = &obj->head.next;
-        oldcount += 1;
+        g->sweephead = &obj->head.next;
+        g->nold += 1;
     } else {
-        *sweephead = obj->head.next;
+        *g->sweephead = obj->head.next;
         free(obj);
     }
 }
 
 
-void mark(union object *obj) {
+void mark(struct lisp_global *g, union object *obj) {
     if (obj->head.mark != 0) {
         return;
     }
     obj->head.mark = 1;
-    obj->head.back = markhead;
-    markhead = obj;
+    obj->head.back = g->markhead;
+    g->markhead = obj;
 }
 
 
-void mark1(void) {
+void mark1(struct lisp_global *g) {
     union object *obj;
-    obj = markhead;
+    obj = g->markhead;
     if (obj == NULL) {
         return;
     }
-    markhead = obj->head.back;
+    g->markhead = obj->head.back;
     switch (obj->head.tag) {
     case TAG_NIL:
         break;
     case TAG_CONS:
-        mark(obj->cons.car);
-        mark(obj->cons.cdr);
+        mark(g, obj->cons.car);
+        mark(g, obj->cons.cdr);
         break;
     case TAG_STRING:
         break;
     case TAG_SYMBOL:
-        mark(obj->symbol.name);
+        mark(g, obj->symbol.name);
         break;
     case TAG_FIXNUM:
         break;
@@ -177,73 +199,73 @@ void mark1(void) {
 }
 
 
-void markroots(void) {
+void markroots(struct lisp_global *g) {
+    (void)g;
 }
 
 
-void collect(int full) {
+void collect(struct lisp_global *g, int full) {
     unsigned int i;
 
-    if (!full && (youngcount < oldcount || youngcount < GC_MIN_BATCH)) {
+    if (!full && (g->nyoung < g->nold || g->nyoung < GC_MIN_BATCH)) {
         return;
     }
 
-    if (markhead == NULL && sweephead == NULL) {
-        markroots();
+    if (g->markhead == NULL && g->sweephead == NULL) {
+        markroots(g);
     }
 
     for (i = 0; full || (i < GC_MAX_BATCH); i++) {
-        if (markhead != NULL) {
-            mark1();
-            if (markhead == NULL) {
-                sweephead = &gclist;
-                oldcount = 0;
+        if (g->markhead != NULL) {
+            mark1(g);
+            if (g->markhead == NULL) {
+                g->sweephead = &g->objs;
+                g->nold = 0;
             }
-        } else if (sweephead != NULL) {
-            sweep1();
+        } else if (g->sweephead != NULL) {
+            sweep1(g);
         } else {
-            youngcount = 0;
+            g->nyoung = 0;
             return;
         }
     }
 }
 
 
-union object *makeobj(int tag, size_t size) {
+union object *makeobj(struct lisp_global *g, int tag, size_t size) {
     union object *ret;
-    collect(0);
+    collect(g, 0);
     ret = malloc(size);
     if (ret == NULL) {
         die("OUT OF MEMORY");
     }
     ret->head.tag = tag;
     ret->head.mark = 0;
-    ret->head.next = gclist;
+    ret->head.next = g->objs;
     ret->head.back = NULL;
-    gclist = ret;
-    youngcount += 1;
+    g->objs = ret;
+    g->nyoung += 1;
     return ret;
 }
 
 
-union object *makenil(void) {
-    static union object ob = {{TAG_NIL, 0, NULL, NULL}};
-    return &ob;
+union object *makenil(struct lisp_global *g) {
+    return &g->nil;
 }
 
 
-union object *makecons(union object *car, union object *cdr) {
+union object *makecons(struct lisp_global *g, union object *car, union object *cdr) {
     union object *ret = NULL;
-    ret = makeobj(TAG_CONS, sizeof(ret->cons));
+    ret = makeobj(g, TAG_CONS, sizeof(ret->cons));
     ret->cons.car = car;
     ret->cons.cdr = cdr;
     return ret;
 }
 
 
-union object *makestring(unsigned char *value, unsigned int length) {
+union object *makestring(struct lisp_global *g, unsigned char *value, unsigned int length) {
     union object *ret = NULL;
-    ret = makeobj(TAG_STRING, sizeof(ret->string) + length);
+    ret = makeobj(g, TAG_STRING, sizeof(ret->string) + length);
     memcpy(ret + 1, value, length);
     ret->string.value = (unsigned char *)(ret + 1);
     ret->string.length = length;
@@ -251,31 +273,31 @@ union object *makestring(unsigned char *value, unsigned int length) {
 }
 
 
-union object *makesymbol(unsigned char *name, unsigned int length) {
+union object *makesymbol(struct lisp_global *g, unsigned char *name, unsigned int length) {
     union object *ret = NULL;
-    ret = makeobj(TAG_SYMBOL, sizeof(ret->symbol));
-    ret->symbol.name = makestring(name, length);
+    ret = makeobj(g, TAG_SYMBOL, sizeof(ret->symbol));
+    ret->symbol.name = makestring(g, name, length);
     return ret;
 }
 
 
-union object *makefixnum(int value) {
+union object *makefixnum(struct lisp_global *g, int value) {
     union object *ret = NULL;
-    ret = makeobj(TAG_FIXNUM, sizeof(ret->fixnum));
+    ret = makeobj(g, TAG_FIXNUM, sizeof(ret->fixnum));
     ret->fixnum.value = value;
     return ret;
 }
 
 
-union object *cintern(char *name) {
+union object *cintern(struct lisp_global *g, char *name) {
     if (strcmp(name, "nil") == 0) {
-        return makenil();
+        return makenil(g);
     }
-    return makesymbol((unsigned char *)name, strlen(name));
+    return makesymbol(g, (unsigned char *)name, strlen(name));
 }
 
 
-union object *parsetoken(unsigned char *maybeint, unsigned int length) {
+union object *parsetoken(struct lisp_global *g, unsigned char *maybeint, unsigned int length) {
     long int value;
     unsigned int i = 0;
     char buffer[32];
@@ -302,14 +324,14 @@ union object *parsetoken(unsigned char *maybeint, unsigned int length) {
             die("FIXNUM OVERFLOW");
         }
 
-        return makefixnum(value);
+        return makefixnum(g, value);
     }
 
     if (length == 3 && memcmp(maybeint, "nil", 3) == 0) {
-        return makenil();
+        return makenil(g);
     }
 
-    return makesymbol(maybeint, length);
+    return makesymbol(g, maybeint, length);
 }
 
 
@@ -335,7 +357,7 @@ int munch_whitespace(FILE *file)
 }
 
 
-union object *lisp_read(int expect)
+union object *lisp_read(struct lisp_global *g, int expect)
 {
     int ch;
     unsigned int length;
@@ -355,28 +377,28 @@ union object *lisp_read(int expect)
         case '(':
             ch = munch_whitespace(stdin);
             if (ch == ')') {
-                return makenil();
+                return makenil(g);
             }
 
-            obj = makecons(NULL, makenil());
+            obj = makecons(g, makenil(g), makenil(g));
             tail = obj;
 
             while (1) {
                 ungetc(ch, stdin);
-                tail->cons.car = lisp_read(1);
+                tail->cons.car = lisp_read(g, 1);
 
                 ch = munch_whitespace(stdin);
                 if (ch == ')') {
                     return obj;
                 } else if (ch == '.') {
-                    tail->cons.cdr = lisp_read(1);
+                    tail->cons.cdr = lisp_read(g, 1);
                     ch = munch_whitespace(stdin);
                     if (ch != ')') {
                         die("EXPECTED ) AFTER CDR VALUE");
                     }
                     return obj;
                 } else {
-                    tail->cons.cdr = makecons(NULL, makenil());
+                    tail->cons.cdr = makecons(g, makenil(g), makenil(g));
                     tail = tail->cons.cdr;
                 }
             }
@@ -387,25 +409,27 @@ union object *lisp_read(int expect)
 
         case '\'':
             return makecons(
-                cintern("quote"),
-                makecons(lisp_read(1), makenil())
+                g,
+                cintern(g, "quote"),
+                makecons(g, lisp_read(g, 1), makenil(g))
             );
 
         case '`':
             return makecons(
-                cintern("quasiquote"),
-                makecons(lisp_read(1), makenil())
+                g,
+                cintern(g, "quasiquote"),
+                makecons(g, lisp_read(g, 1), makenil(g))
             );
 
         case ',':
             ch = getc(stdin);
             if (ch == '@') {
-                obj = cintern("unquote-splicing");
+                obj = cintern(g, "unquote-splicing");
             } else {
-                obj = cintern("unquote");
+                obj = cintern(g, "unquote");
                 ungetc(ch, stdin);
             }
-            return makecons(obj, makecons(lisp_read(1), makenil()));
+            return makecons(g, obj, makecons(g, lisp_read(g, 1), makenil(g)));
 
         case '"':
             length = 0;
@@ -426,7 +450,7 @@ union object *lisp_read(int expect)
                 scratch[length] = ch;
                 length += 1;
             }
-            return makestring(scratch, length);
+            return makestring(g, scratch, length);
 
         default:
             if (!lisp_istokenchar(ch)) {
@@ -442,7 +466,7 @@ union object *lisp_read(int expect)
                 ch = getc(stdin);
             } while (lisp_istokenchar(ch));
             ungetc(ch, stdin);
-            return parsetoken(scratch, length);
+            return parsetoken(g, scratch, length);
         }
     }
 }
@@ -461,9 +485,11 @@ int lisp_isnil(union object *object) {
 }
 
 
-void lisp_write(union object *object) {
+void lisp_write(struct lisp_global *g, union object *object) {
     unsigned int i;
     int ch;
+
+    (void)g;
 
     if (object == NULL) {
         die("INVALID VALUE");
@@ -477,12 +503,12 @@ void lisp_write(union object *object) {
     case TAG_CONS:
         putc('(', stdout);
         while (1) {
-            lisp_write(object->cons.car);
+            lisp_write(g, object->cons.car);
             if (lisp_isnil(object->cons.cdr)) {
                 break;
             } else if (object->cons.cdr == NULL || object->cons.cdr->head.tag != TAG_CONS) {
                 fputs(" . ", stdout);
-                lisp_write(object->cons.cdr);
+                lisp_write(g, object->cons.cdr);
                 break;
             } else {
                 putc(' ', stdout);
@@ -527,20 +553,22 @@ void lisp_write(union object *object) {
 
 int main(int argc, char **argv)
 {
+    struct lisp_global *g;
     union object *value;
     (void)argc;
     (void)argv;
 
+    g = makeglobal();
     while (1) {
-        value = lisp_read(0);
+        value = lisp_read(g, 0);
         if (value == NULL) {
             break;
         }
-        lisp_write(value);
+        lisp_write(g, value);
         printf("\n");
         fflush(stdout);
     }
-    collect(1);
+    collect(g, 1);
 
     printf("Hello, world!\n");
     return 0;
