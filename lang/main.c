@@ -22,6 +22,9 @@
 #include <string.h>
 
 
+#define GC_MAX_BATCH    (10000)
+
+
 void die(char *format, ...)
 {
     va_list args;
@@ -114,21 +117,17 @@ union object {
 union object *gclist = NULL;
 union object *markhead = NULL;
 union object **sweephead = NULL;
+unsigned int youngcount = 0;
+unsigned int oldcount = 0;
 
 
-int sweep1(void) {
+void sweep1(void) {
     union object *obj;
-
-    if (sweephead == NULL) {
-        return 0;
-    }
-
     obj = *sweephead;
     if (obj == NULL) {
         sweephead = NULL;
-        return 0;
+        return;
     }
-
     if (obj->head.mark) {
         obj->head.mark = 0;
         sweephead = &obj->head.next;
@@ -136,8 +135,6 @@ int sweep1(void) {
         *sweephead = obj->head.next;
         free(obj);
     }
-
-    return 1;
 }
 
 
@@ -145,21 +142,18 @@ void mark(union object *obj) {
     if (obj->head.mark != 0) {
         return;
     }
-
     obj->head.mark = 1;
     obj->head.back = markhead;
     markhead = obj;
 }
 
 
-int mark1(void) {
+void mark1(void) {
     union object *obj;
-
     obj = markhead;
     if (obj == NULL) {
-        return 0;
+        return;
     }
-
     markhead = obj->head.back;
     switch (obj->head.tag) {
     case TAG_NIL:
@@ -178,8 +172,6 @@ int mark1(void) {
     default:
         die("INVALID TAG %p", (void *)obj);
     }
-
-    return 1;
 }
 
 
@@ -187,20 +179,32 @@ void markroots(void) {
 }
 
 
-void collect(void) {
+void collect(int full) {
+    unsigned int i;
+
+    if (!full && youngcount < oldcount) {
+        return;
+    }
+
     if (markhead == NULL && sweephead == NULL) {
         markroots();
-    } else if (markhead != NULL) {
-        while (mark1());
-        sweephead = &gclist;
-    } else {
-        while (sweep1());
+    }
+
+    for (i = 0; full || (i < GC_MAX_BATCH); i++) {
+        if (markhead != NULL) {
+            mark1();
+        } else if (sweephead != NULL) {
+            sweep1();
+        } else {
+            return;
+        }
     }
 }
 
 
 union object *makeobj(int tag, size_t size) {
     union object *ret;
+    collect(0);
     ret = malloc(size);
     if (ret == NULL) {
         die("OUT OF MEMORY");
@@ -210,6 +214,7 @@ union object *makeobj(int tag, size_t size) {
     ret->head.next = gclist;
     ret->head.back = NULL;
     gclist = ret;
+    youngcount += 1;
     return ret;
 }
 
@@ -528,7 +533,7 @@ int main(int argc, char **argv)
         printf("\n");
         fflush(stdout);
     }
-    collect();
+    collect(1);
 
     printf("Hello, world!\n");
     return 0;
