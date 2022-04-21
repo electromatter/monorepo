@@ -186,7 +186,7 @@ void sweep1(struct lisp_global *g) {
         g->nold += 1;
     } else {
         *g->sweep = obj->head.next;
-        /*free(obj);*/
+        free(obj);
     }
 }
 
@@ -275,7 +275,7 @@ void freeglobal(struct lisp_global *g) {
 
 union object *makeobj(struct lisp_global *g, int tag, size_t size) {
     union object *ret;
-    collect(g, 0);
+    /* collect(g, 0); */
     ret = (union object *)malloc(size);
     if (ret == NULL) {
         die("OUT OF MEMORY");
@@ -561,6 +561,16 @@ lispval_t makehashtbl(struct lisp_global *g) {
 }
 
 
+/*
+hashget
+hashput
+hashdel
+hash
+compiler
+interpreter
+*/
+
+
 lispval_t lisp_name(struct lisp_global *g, lispval_t x) {
     union object *o;
     (void) g;
@@ -835,6 +845,9 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
         for (i = 0; i < length; i++) {
             a = lisp_vecelt(g, x, i);
             lisp_write(g, a);
+            if (i != length) {
+                putc(' ', stdout);
+            }
         }
         putc(')', stdout);
         break;
