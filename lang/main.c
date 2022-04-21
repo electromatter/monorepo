@@ -687,6 +687,7 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         hash ^= lisp_hash(g, cdr(g, k), depth + 1);
         hash *= 13;
         break;
+
     case TAG_STRING:
         s = lisp_str(g, k);
         length = lisp_strlen(g, k);
@@ -694,10 +695,7 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         break;
 
     case TAG_SYMBOL:
-        s = lisp_cname(g, k);
-        length = lisp_symlen(g, k);
-        hash = 7 * fnv1a(s, length);
-        break;
+        return (unsigned int)k.ptr;
 
     case TAG_VECTOR:
         length = lisp_veclen(g, k);
@@ -707,10 +705,8 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         }
         break;
 
-    /*
     case TAG_HASHTBL:
-        break;
-    */
+        return (unsigned int)k.ptr;
 
     default:
         die("INVALID TAG %s at %p", stag(lisp_tag(k)), k.ptr);
@@ -724,12 +720,71 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
 }
 
 
-#if 0
-lispval_t
-lisp_eql(struct lisp_global *g, lispval_t x, lispval_t y) {
+int
+lisp_equal(struct lisp_global *g, lispval_t x, lispval_t y) {
+    const unsigned char *a;
+    const unsigned char *b;
+    int i;
+    int length;
+
+    if (lisp_eq(x, y)) {
+        return 1;
+    }
+
+    if (lisp_tag(x) != lisp_tag(y)) {
+        return 0;
+    }
+
+    switch (lisp_tag(x)) {
+    case TAG_CONS:
+        if (lisp_equal(g, car(g, x), car(g, y)) == 0) {
+            return 0;
+        }
+        if (lisp_equal(g, cdr(g, x), cdr(g, y)) == 0) {
+            return 0;
+        }
+        return 1;
+
+    case TAG_STRING:
+        a = lisp_str(g, x);
+        b = lisp_str(g, y);
+        length = lisp_strlen(g, x);
+        if (length != lisp_strlen(g, y)) {
+            return 0;
+        }
+        for (i = 0; i < length; i++) {
+            if (a[i] != b[i]) {
+                return 0;
+            }
+        }
+        return 1;
+
+    case TAG_SYMBOL:
+        return 0;
+
+    case TAG_VECTOR:
+        length = lisp_veclen(g, x);
+        if (length != lisp_veclen(g, y)) {
+            return 0;
+        }
+        for (i = 0; i < length; i++) {
+            if (lisp_equal(g, lisp_vecelt(g, x, i), lisp_vecelt(g, y, i)) == 0) {
+                return 0;
+            }
+        }
+        return 1;
+
+    case TAG_HASHTBL:
+        return 0;
+
+    default:
+        die("INVALID TAG %s at %p", stag(lisp_tag(x)), x.ptr);
+        return 0;
+    }
 }
 
 
+#if 0
 lispval_t
 lisp_hashget(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
 }
@@ -998,7 +1053,6 @@ int main(int argc, char **argv) {
     struct lisp_global *g;
     (void)argc;
     (void)argv;
-
     g = makeglobal();
     repl(g);
     freeglobal(g);
