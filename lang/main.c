@@ -23,6 +23,7 @@
 
 
 #define VEC_MIN_SIZE    (8)
+#define HASH_DEPTH      (16)
 #define GC_MIN_BATCH    (100)
 #define GC_MAX_BATCH    (10000)
 
@@ -456,8 +457,9 @@ lispval_t makevector(struct lisp_global *g, int cap) {
     ret.ptr->vector.capacity = cap;
     ret.ptr->vector.extend = g->nil;
     ret.ptr->vector.slots = (lispval_t *)(&ret.ptr->vector + 1);
-    for (i = 0; i < cap; i++)
+    for (i = 0; i < cap; i++) {
         ret.ptr->vector.slots[i] = g->nil;
+    }
     return ret;
 }
 
@@ -541,31 +543,14 @@ lispval_t makehashtbl(struct lisp_global *g) {
 }
 
 
-#if 0
-unsigned int
-lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
+unsigned int fnv1a(const unsigned char *s, int length) {
+    unsigned int hash = 2166136261;
+    int i;
+    for (i = 0; i < length; i++) {
+        hash = 6777619 * (hash ^ s[i]);
+    }
+    return hash;
 }
-
-
-lispval_t
-lisp_eql(struct lisp_global *g, lispval_t x, lispval_t y) {
-}
-
-
-lispval_t
-lisp_hashget(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
-}
-
-
-lispval_t
-lisp_hashset(struct lisp_global *g, lispval_t h, lispval_t k) {
-}
-
-
-lispval_t
-lisp_hashdrop(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
-}
-#endif
 
 
 int lisp_symlen(struct lisp_global *g, lispval_t x) {
@@ -675,6 +660,90 @@ lispval_t parsetoken(struct lisp_global *g, lispval_t str) {
 
     return makesymbol(g, s, length);
 }
+
+
+unsigned int
+lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
+    const unsigned char *s;
+    int i;
+    int length;
+    unsigned hash = 257;
+
+    if (depth > HASH_DEPTH) {
+        return hash;
+    }
+
+    switch (lisp_tag(k)) {
+    case TAG_FIXNUM:
+        hash = lisp_fixnum(g, k);
+        break;
+
+    case TAG_CHAR:
+        hash = 17 * lisp_char(g, k);
+        break;
+
+    case TAG_CONS:
+        hash = lisp_hash(g, car(g, k), depth + 1);
+        hash ^= lisp_hash(g, cdr(g, k), depth + 1);
+        hash *= 13;
+        break;
+    case TAG_STRING:
+        s = lisp_str(g, k);
+        length = lisp_strlen(g, k);
+        hash = fnv1a(s, length);
+        break;
+
+    case TAG_SYMBOL:
+        s = lisp_cname(g, k);
+        length = lisp_symlen(g, k);
+        hash = 7 * fnv1a(s, length);
+        break;
+
+    case TAG_VECTOR:
+        length = lisp_veclen(g, k);
+        for (i = 0; i < length; i++) {
+            hash ^= lisp_hash(g, lisp_vecelt(g, k, i), depth + 1);
+            hash *= 65537;
+        }
+        break;
+
+    /*
+    case TAG_HASHTBL:
+        break;
+    */
+
+    default:
+        die("INVALID TAG %s at %p", stag(lisp_tag(k)), k.ptr);
+    }
+
+    if (hash == 0) {
+        hash = 1;
+    }
+
+    return hash;
+}
+
+
+#if 0
+lispval_t
+lisp_eql(struct lisp_global *g, lispval_t x, lispval_t y) {
+}
+
+
+lispval_t
+lisp_hashget(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
+}
+
+
+lispval_t
+lisp_hashset(struct lisp_global *g, lispval_t h, lispval_t k) {
+}
+
+
+lispval_t
+lisp_hashdel(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
+}
+#endif
 
 
 int munch_whitespace(FILE *file)
@@ -790,12 +859,11 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
                 while (1) {
                     ch = munch_whitespace(stdin);
                     if (ch == ')') {
-                        return obj;
+                        break;
                     }
                     ungetc(ch, stdin);
                     lisp_vecpush(g, obj, lisp_read(g, 1));
                 }
-                break;
             } else if (ch == '\\') {
                 ch = getc(stdin);
                 obj = makechar(g, ch);
@@ -804,10 +872,10 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
                     die("INVALID CHARACTER %c", ch);
                 }
                 ungetc(ch, stdin);
-                return obj;
             } else {
                 die("UNKNOWN DISPATCHING MACRO CHARACTER %c", ch);
             }
+            return obj;
 
 
         default:
@@ -907,7 +975,7 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
         break;
 
     default:
-        die("INVALID TAG");
+        die("INVALID TAG %s at %p", stag(lisp_tag(x)), x.ptr);
     }
 }
 
