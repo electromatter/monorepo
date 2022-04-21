@@ -131,6 +131,7 @@ struct string {
 
 struct symbol {
     struct obhead head;
+    unsigned int hash;
     int length;
     unsigned char *name;
 };
@@ -147,6 +148,7 @@ struct vector {
 
 struct hashtbl {
     struct obhead head;
+    unsigned int hash;
     lispval_t keyv;
     lispval_t valv;
 };
@@ -171,6 +173,7 @@ struct lisp_global {
     lispval_t eof;
     unsigned int nyoung;
     unsigned int nold;
+    unsigned int nexthash;
 };
 
 
@@ -201,6 +204,7 @@ struct lisp_global *makeglobal(void) {
     g->eof = makesymbol(g, (unsigned char *)"+eof+", 5);
     g->nyoung = 0;
     g->nold = 0;
+    g->nexthash = 0;
     return g;
 }
 
@@ -439,6 +443,8 @@ lispval_t makesymbol(struct lisp_global *g, const unsigned char *s, int n) {
     unsigned char *str;
     ret = makeobj(g, TAG_SYMBOL, sizeof(ret.ptr->symbol) + n);
     str = (unsigned char *)(&ret.ptr->symbol + 1);
+    ret.ptr->symbol.hash = g->nexthash;
+    g->nexthash += 1;
     ret.ptr->symbol.name = str;
     memcpy(str, s, n);
     ret.ptr->symbol.length = n;
@@ -537,6 +543,8 @@ void lisp_vecpush(struct lisp_global *g, lispval_t v, lispval_t a) {
 lispval_t makehashtbl(struct lisp_global *g) {
     lispval_t ret;
     ret = makeobj(g, TAG_HASHTBL, sizeof(ret.ptr->hashtbl));
+    ret.ptr->hashtbl.hash = g->nexthash;
+    g->nexthash += 1;
     ret.ptr->hashtbl.keyv = g->nil;
     ret.ptr->hashtbl.valv = g->nil;
     return ret;
@@ -695,7 +703,7 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         break;
 
     case TAG_SYMBOL:
-        return (unsigned int)k.ptr;
+        return k.ptr->symbol.hash;
 
     case TAG_VECTOR:
         length = lisp_veclen(g, k);
@@ -706,7 +714,7 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         break;
 
     case TAG_HASHTBL:
-        return (unsigned int)k.ptr;
+        return k.ptr->hashtbl.hash;
 
     default:
         die("INVALID TAG %s at %p", stag(lisp_tag(k)), k.ptr);
