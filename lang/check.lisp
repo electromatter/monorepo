@@ -1,3 +1,4 @@
+#\a
 "Simple \" strings"
 1234
 +144

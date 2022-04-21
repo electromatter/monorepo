@@ -582,6 +582,23 @@ const unsigned char *lisp_cname(struct lisp_global *g, lispval_t x) {
 }
 
 
+lispval_t makechar(struct lisp_global *g, int value) {
+    lispval_t ret;
+    (void)g;
+    ret.tag = TAG_CHAR;
+    ret.fix = value & 0xff;
+    ret.ptr = 0;
+    return ret;
+}
+
+
+int lisp_char(struct lisp_global *g, lispval_t x) {
+    (void)g;
+    expect_tag(x, TAG_CHAR);
+    return x.fix;
+}
+
+
 lispval_t makefixnum(struct lisp_global *g, int value) {
     lispval_t ret;
     (void)g;
@@ -768,20 +785,30 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
 
         case '#':
             ch = getc(stdin);
-            if (ch != '(') {
+            if (ch == '(') {
+                obj = makevector(g, 0);
+                while (1) {
+                    ch = munch_whitespace(stdin);
+                    if (ch == ')') {
+                        return obj;
+                    }
+                    ungetc(ch, stdin);
+                    lisp_vecpush(g, obj, lisp_read(g, 1));
+                }
+                break;
+            } else if (ch == '\\') {
+                ch = getc(stdin);
+                obj = makechar(g, ch);
+                ch = munch_whitespace(stdin);
+                if (lisp_istokenchar(ch)) {
+                    die("INVALID CHARACTER %c", ch);
+                }
+                ungetc(ch, stdin);
+                return obj;
+            } else {
                 die("UNKNOWN DISPATCHING MACRO CHARACTER %c", ch);
             }
 
-            obj = makevector(g, 0);
-
-            while (1) {
-                ch = munch_whitespace(stdin);
-                if (ch == ')') {
-                    return obj;
-                }
-                ungetc(ch, stdin);
-                lisp_vecpush(g, obj, lisp_read(g, 1));
-            }
 
         default:
             if (!lisp_istokenchar(ch)) {
@@ -812,7 +839,7 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
         break;
 
     case TAG_CHAR:
-        printf("%d", x.fix);
+        printf("#\\%c", x.fix);
         break;
 
     case TAG_CONS:
