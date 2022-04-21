@@ -757,6 +757,23 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
             }
             return token;
 
+        case '#':
+            ch = getc(stdin);
+            if (ch != '(') {
+                die("UNKNOWN DISPATCHING MACRO CHARACTER %c", ch);
+            }
+
+            obj = makevector(g, 0);
+
+            while (1) {
+                ch = munch_whitespace(stdin);
+                if (ch == ')') {
+                    return obj;
+                }
+                ungetc(ch, stdin);
+                lisp_vecpush(g, obj, lisp_read(g, 1));
+            }
+
         default:
             if (!lisp_istokenchar(ch)) {
                 die("INVALID CHARACTER %c", ch);
@@ -843,11 +860,11 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
         putc('#', stdout);
         putc('(', stdout);
         for (i = 0; i < length; i++) {
-            a = lisp_vecelt(g, x, i);
-            lisp_write(g, a);
-            if (i != length) {
+            if (i > 0) {
                 putc(' ', stdout);
             }
+            a = lisp_vecelt(g, x, i);
+            lisp_write(g, a);
         }
         putc(')', stdout);
         break;
