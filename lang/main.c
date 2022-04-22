@@ -24,6 +24,8 @@
 
 #define VEC_MIN_SIZE    (8)
 #define HASH_DEPTH      (16)
+#define HASH_TOMBSTONE  ((unsigned int)-1)
+#define HASH_EMPTY      ((unsigned int)0)
 #define GC_MIN_BATCH    (100)
 #define GC_MAX_BATCH    (10000)
 
@@ -37,7 +39,7 @@ void die(const char *format, ...)
     vfprintf(stderr, format, args);
     putc('\n', stderr);
     fflush(stderr);
-    exit(1);
+    abort();
     va_end(args);
 }
 
@@ -72,6 +74,7 @@ enum tag {
     TAG_STRING,
     TAG_SYMBOL,
     TAG_VECTOR,
+    TAG_HASHVEC,
     TAG_HASHTBL
 };
 
@@ -90,6 +93,8 @@ const char *stag(int tag) {
         return "SYMBOL";
     case TAG_VECTOR:
         return "VECTOR";
+    case TAG_HASHVEC:
+        return "HASHVEC";
     case TAG_HASHTBL:
         return "HASHTBL";
     default:
@@ -146,11 +151,26 @@ struct vector {
 };
 
 
+struct hashcell {
+    unsigned int hash;
+    lispval_t key;
+    lispval_t val;
+};
+
+
+struct hashvec {
+    struct obhead head;
+    int capacity;
+    struct hashcell *slots;
+};
+
+
 struct hashtbl {
     struct obhead head;
     unsigned int hash;
-    lispval_t keyv;
-    lispval_t valv;
+    int fill;
+    int load;
+    lispval_t hashvec;
 };
 
 
@@ -160,6 +180,7 @@ union object {
     struct string string;
     struct symbol symbol;
     struct vector vector;
+    struct hashvec hashvec;
     struct hashtbl hashtbl;
 };
 
@@ -171,6 +192,7 @@ struct lisp_global {
     lispval_t nil;
     lispval_t t;
     lispval_t eof;
+    lispval_t root;
     unsigned int nyoung;
     unsigned int nold;
     unsigned int nexthash;
@@ -199,12 +221,13 @@ struct lisp_global *makeglobal(void) {
     g->objs = NULL;
     g->mark = NULL;
     g->sweep = NULL;
-    g->nil = makesymbol(g, (unsigned char *)"nil", 3);
-    g->t = makesymbol(g, (unsigned char *)"t", 1);
-    g->eof = makesymbol(g, (unsigned char *)"+eof+", 5);
     g->nyoung = 0;
     g->nold = 0;
     g->nexthash = 0;
+    g->nil = makesymbol(g, (unsigned char *)"nil", 3);
+    g->t = makesymbol(g, (unsigned char *)"t", 1);
+    g->eof = makesymbol(g, (unsigned char *)"+eof+", 5);
+    g->root = g->nil;
     return g;
 }
 
@@ -259,9 +282,12 @@ void mark1(struct lisp_global *g) {
             mark(g, obj->vector.slots[i]);
         }
         break;
+    case TAG_HASHVEC:
+        for (i = 0; i < obj->hashvec.capacity; i++) {
+        }
+        break;
     case TAG_HASHTBL:
-        mark(g, obj->hashtbl.keyv);
-        mark(g, obj->hashtbl.valv);
+        mark(g, obj->hashtbl.hashvec);
         break;
     case TAG_FIXNUM:
         break;
@@ -272,7 +298,10 @@ void mark1(struct lisp_global *g) {
 
 
 void markroots(struct lisp_global *g) {
-    (void)g;
+    mark(g, g->nil);
+    mark(g, g->t);
+    mark(g, g->eof);
+    mark(g, g->root);
 }
 
 
@@ -540,13 +569,32 @@ void lisp_vecpush(struct lisp_global *g, lispval_t v, lispval_t a) {
 }
 
 
+lispval_t makehashvec(struct lisp_global *g, int n) {
+    lispval_t ret;
+    int i;
+    if ((n & (n - 1)) != 0) {
+        die("NOT A POWER OF TWO");
+    }
+    ret = makeobj(g, TAG_HASHVEC, sizeof(ret.ptr->hashvec) + n * sizeof(*ret.ptr->hashvec.slots));
+    ret.ptr->hashvec.capacity = n;
+    ret.ptr->hashvec.slots = (struct hashcell *)(&ret.ptr->hashvec + 1);
+    for (i = 0; i < n; i++) {
+        ret.ptr->hashvec.slots[i].hash = HASH_EMPTY;
+        ret.ptr->hashvec.slots[i].key = g->nil;
+        ret.ptr->hashvec.slots[i].val = g->nil;
+    }
+    return ret;
+}
+
+
 lispval_t makehashtbl(struct lisp_global *g) {
     lispval_t ret;
     ret = makeobj(g, TAG_HASHTBL, sizeof(ret.ptr->hashtbl));
     ret.ptr->hashtbl.hash = g->nexthash;
     g->nexthash += 1;
-    ret.ptr->hashtbl.keyv = g->nil;
-    ret.ptr->hashtbl.valv = g->nil;
+    ret.ptr->hashtbl.fill = 0;
+    ret.ptr->hashtbl.load = 0;
+    ret.ptr->hashtbl.hashvec = makehashvec(g, VEC_MIN_SIZE);
     return ret;
 }
 
@@ -703,7 +751,8 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         break;
 
     case TAG_SYMBOL:
-        return k.ptr->symbol.hash;
+        hash = k.ptr->symbol.hash;
+        break;
 
     case TAG_VECTOR:
         length = lisp_veclen(g, k);
@@ -714,14 +763,15 @@ lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
         break;
 
     case TAG_HASHTBL:
-        return k.ptr->hashtbl.hash;
+        hash = k.ptr->hashtbl.hash;
+        break;
 
     default:
         die("INVALID TAG %s at %p", stag(lisp_tag(k)), k.ptr);
     }
 
-    if (hash == 0) {
-        hash = 1;
+    if (hash == HASH_TOMBSTONE || hash == HASH_EMPTY) {
+        hash = 43;
     }
 
     return hash;
@@ -744,6 +794,12 @@ lisp_equal(struct lisp_global *g, lispval_t x, lispval_t y) {
     }
 
     switch (lisp_tag(x)) {
+    case TAG_FIXNUM:
+        return 0;
+
+    case TAG_CHAR:
+        return 0;
+
     case TAG_CONS:
         if (lisp_equal(g, car(g, x), car(g, y)) == 0) {
             return 0;
@@ -792,21 +848,134 @@ lisp_equal(struct lisp_global *g, lispval_t x, lispval_t y) {
 }
 
 
-#if 0
-lispval_t
-lisp_hashget(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
+void hashexpand(struct lisp_global *g, struct hashtbl *h);
+
+
+struct hashcell *
+hashfind(struct lisp_global *g, struct hashtbl *h, lispval_t k, unsigned int hc, int *found) {
+    struct hashcell *cell = NULL;
+    struct hashcell *tombstone = NULL;
+    struct hashvec *v = &h->hashvec.ptr->hashvec;
+    unsigned int i = 0;
+    unsigned int mask = 0;
+    *found = 0;
+    mask = v->capacity - 1;
+    for (i = hc & mask; ; i = (i * 5 + 1) & mask) {
+        cell = &v->slots[i];
+        if (cell->hash == HASH_EMPTY && tombstone != NULL) {
+            return tombstone;
+        } else if (cell->hash == HASH_EMPTY) {
+            return cell;
+        } else if (cell->hash == HASH_TOMBSTONE && tombstone == NULL) {
+            tombstone = cell;
+        } else if (cell->hash == hc && lisp_equal(g, cell->key, k)) {
+            *found = 1;
+            return cell;
+        }
+    }
+}
+
+
+void hashexpand(struct lisp_global *g, struct hashtbl *h) {
+    lispval_t nv;
+    struct hashvec *v = &h->hashvec.ptr->hashvec;
+    struct hashcell *cell;
+    int i;
+    int n;
+    int f;
+    int found;
+
+    if (h->load * 4 < v->capacity * 3 && h->fill * 2 >= h->load) {
+        return;
+    }
+
+    if (h->fill > INT_MAX / 16) {
+        die("hash table too big");
+    }
+
+    f = h->fill + (h->fill * 5 + 7) / 8;
+    n = VEC_MIN_SIZE;
+    while (f > n) {
+        n *= 2;
+    }
+
+    nv = makehashvec(g, n);
+    h->hashvec = nv;
+    h->load = h->fill;
+
+    for (i = 0; i < v->capacity; i++) {
+        if (v->slots[i].hash == HASH_EMPTY || v->slots[i].hash == HASH_TOMBSTONE) {
+            continue;
+        }
+        cell = hashfind(g, h, v->slots[i].key, v->slots[i].hash, &found);
+        cell->hash = v->slots[i].hash;
+        cell->key = v->slots[i].key;
+        cell->val = v->slots[i].val;
+    }
 }
 
 
 lispval_t
-lisp_hashset(struct lisp_global *g, lispval_t h, lispval_t k) {
+hashget(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
+    int found;
+    unsigned int hc;
+    struct hashcell *cell;
+    struct hashtbl *ht;
+    expect_tag(h, TAG_HASHTBL);
+    ht = &h.ptr->hashtbl;
+    hashexpand(g, ht);
+    hc = lisp_hash(g, k, 0);
+    cell = hashfind(g, ht, k, hc, &found);
+    if (found) {
+        return cell->val;
+    }
+    return d;
+}
+
+
+void
+hashset(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t v) {
+    int found;
+    unsigned int hc;
+    struct hashcell *cell;
+    struct hashtbl *ht;
+    expect_tag(h, TAG_HASHTBL);
+    ht = &h.ptr->hashtbl;
+    hashexpand(g, ht);
+    hc = lisp_hash(g, k, 0);
+    cell = hashfind(g, ht, k, hc, &found);
+    if (cell->hash == HASH_EMPTY) {
+        ht->load += 1;
+        ht->fill += 1;
+    } else if (cell->hash == HASH_TOMBSTONE) {
+        ht->fill += 1;
+    }
+    cell->hash = hc;
+    cell->key = k;
+    cell->val = v;
 }
 
 
 lispval_t
-lisp_hashdel(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
+hashpop(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
+    int found;
+    unsigned int hc;
+    struct hashcell *cell;
+    struct hashtbl *ht;
+    expect_tag(h, TAG_HASHTBL);
+    ht = &h.ptr->hashtbl;
+    hashexpand(g, ht);
+    hc = lisp_hash(g, k, 0);
+    cell = hashfind(g, ht, k, hc, &found);
+    if (found) {
+        ht->fill -= 1;
+        d = cell->val;
+        cell->hash = HASH_TOMBSTONE;
+        cell->key = g->nil;
+        cell->val = g->nil;
+    }
+    return d;
 }
-#endif
 
 
 int munch_whitespace(FILE *file)
