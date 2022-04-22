@@ -245,7 +245,7 @@ void sweep1(struct lisp_global *g) {
         g->nold += 1;
     } else {
         *g->sweep = obj->head.next;
-        free(obj);
+        /* free(obj); TODO mark on the C stack. */
     }
 }
 
@@ -256,6 +256,9 @@ void mark(struct lisp_global *g, lispval_t x) {
         return;
     }
     o = x.ptr;
+    if (o->head.mark) {
+        return;
+    }
     o->head.mark = 1;
     o->head.back = g->mark;
     g->mark = o;
@@ -284,6 +287,8 @@ void mark1(struct lisp_global *g) {
         break;
     case TAG_HASHVEC:
         for (i = 0; i < obj->hashvec.capacity; i++) {
+            mark(g, obj->hashvec.slots[i].key);
+            mark(g, obj->hashvec.slots[i].val);
         }
         break;
     case TAG_HASHTBL:
@@ -338,7 +343,7 @@ void freeglobal(struct lisp_global *g) {
 
 lispval_t makeobj(struct lisp_global *g, int tag, size_t size) {
     lispval_t ret;
-    /* collect(g, 0); */
+    collect(g, 0);
     ret.tag = tag;
     ret.fix = 0;
     ret.ptr = (union object *)malloc(size);
@@ -1015,7 +1020,7 @@ lispval_t lisp_read(struct lisp_global *g, int expect)
             if (expect) {
                 die("EXPECTED VALUE GOT END OF FILE");
             }
-            return cintern(g, "+eof+");
+            return g->eof;
 
         case '(':
             ch = munch_whitespace(stdin);
@@ -1212,6 +1217,12 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
 }
 
 
+lispval_t lisp_eval(struct lisp_global *g, lispval_t x) {
+    (void) g;
+    return x;
+}
+
+
 void repl(struct lisp_global *g) {
     lispval_t x;
     while (1) {
@@ -1219,6 +1230,7 @@ void repl(struct lisp_global *g) {
         if (lisp_eq(x, g->eof)) {
             break;
         }
+        x = lisp_eval(g, x);
         lisp_write(g, x);
         printf("\n");
         fflush(stdout);
