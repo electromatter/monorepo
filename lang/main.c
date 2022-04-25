@@ -182,8 +182,7 @@ static val_t func(val_t a, val_t b, val_t c)
 
 #define TAG(x)          ((x).tag)
 
-#define MAKEFIXNUM(x, f)                                                \
-                        ((x).tag = TAG_FIXNUM, (x).fix = (f), (x).ptr = 0)
+#define MAKEFIX(x, f)   ((x).tag = TAG_FIXNUM, (x).fix = (f), (x).ptr = 0)
 #define MAKECHAR(x, f)  ((x).tag = TAG_CHAR, (x).fix = (f), (x).ptr = 0)
 
 #define EQ(x, y)        ((x).tag == (y).tag && (x).fix == (y).fix &&    \
@@ -315,7 +314,7 @@ DEFINE2(cons, a, d) {
     LOCAL2(ret, z);
 L   ret = alloc(TAG_CONS);
 
-    MAKEFIXNUM(z, 0);
+    MAKEFIX(z, 0);
 L   CONS(ret)->car = z;
 L   CONS(ret)->cdr = z;
 
@@ -449,7 +448,7 @@ L   vector_extend(v);
     if (TAG(v) == TAG_VECTOR) {
 L       length = VECTOR(v)->length;
 L       VECTOR(v)->slots[length] = x;
-        MAKEFIXNUM(ret, length);
+        MAKEFIX(ret, length);
         length += 1;
 L       VECTOR(v)->length = length;
         WBARRIER(v, x);
@@ -457,7 +456,7 @@ L       VECTOR(v)->length = length;
 L       length = STRING(v)->length;
 L       ch = CHAR(x);
 L       STRING(v)->slots[length] = ch;
-        MAKEFIXNUM(ret, length);
+        MAKEFIX(ret, length);
         length += 1;
 L       STRING(v)->length = length;
     } else {
@@ -476,7 +475,7 @@ L       length = STRING(v)->length;
     } else {
 L       die("Type error. Expected a string or vector.");
     }
-    MAKEFIXNUM(ret, length);
+    MAKEFIX(ret, length);
     RETURN(ret);
 }
 
@@ -561,13 +560,13 @@ L   if (FIXNUM(depth) > HASH_DEPTH) {
 
     case TAG_CHAR:
 L       x = CHAR(val);
-        MAKEFIXNUM(hc, x);
+        MAKEFIX(hc, x);
         RETURN(hc);
 
     case TAG_CONS:
 L       x = FIXNUM(depth);
         x += 1;
-        MAKEFIXNUM(depth, x);
+        MAKEFIX(depth, x);
         x = 2166136261;
 L       a = car(val);
 L       hc = hashval(a, depth);
@@ -575,33 +574,33 @@ L       x = 6777619 * (FIXNUM(hc) ^ x);
 L       a = cdr(val);
 L       hc = hashval(a, depth);
 L       x = 6777619 * (FIXNUM(hc) ^ x);
-        MAKEFIXNUM(hc, x & FIXNUM_MAX);
+        MAKEFIX(hc, x & FIXNUM_MAX);
         RETURN(hc);
 
     case TAG_SYMBOL:
         x = IDENTITY(val);
-        MAKEFIXNUM(hc, x);
+        MAKEFIX(hc, x);
         RETURN(hc);
 
     case TAG_STRING: case TAG_VECTOR:
 L       x = FIXNUM(depth);
         x += 1;
-        MAKEFIXNUM(depth, x);
+        MAKEFIX(depth, x);
 L       hc = vector_length(val);
 L       length = FIXNUM(hc);
         x = 2166136261;
         for (i = 0; i < length; i++) {
-            MAKEFIXNUM(hc, i);
+            MAKEFIX(hc, i);
 L           a = elt(val, hc);
 L           hc = hashval(a, depth);
 L           x = 6777619 * (FIXNUM(hc) ^ x);
         }
-        MAKEFIXNUM(hc, x & FIXNUM_MAX);
+        MAKEFIX(hc, x & FIXNUM_MAX);
         RETURN(hc);
 
     case TAG_HASHTBL:
         x = IDENTITY(val);
-        MAKEFIXNUM(hc, x);
+        MAKEFIX(hc, x);
         RETURN(hc);
     }
 
@@ -611,7 +610,7 @@ L   die("Invalid tag");
 
 DEFINE1(sxhash, val) {
     LOCAL2(ret, depth);
-    MAKEFIXNUM(depth, 0);
+    MAKEFIX(depth, 0);
 L   ret = hashval(val, depth);
     RETURN(ret);
 }
@@ -656,7 +655,7 @@ L       b = vector_length(y);
 L       length = FIXNUM(a);
         ret = t;
         for (i = 0; i < length; i++) {
-            MAKEFIXNUM(ret, i);
+            MAKEFIX(ret, i);
 L           a = elt(x, ret);
 L           b = elt(y, ret);
 L           ret = equal(a, b);
@@ -819,7 +818,7 @@ L   SYMBOL(ret)->name = name;
 DEFINE1(intern, x) {
     LOCAL2(s, z);
 
-    MAKEFIXNUM(z, 0);
+    MAKEFIX(z, 0);
 
 L   s = hash_get(memo, x, z);
     if (!EQ(s, z)) {
@@ -877,7 +876,7 @@ L           die("Integer too large");
 L           die("Integer out of fixnum range");
         }
 
-        MAKEFIXNUM(ret, value);
+        MAKEFIX(ret, value);
         RETURN(ret);
     }
 
@@ -1183,7 +1182,7 @@ L       length = VECTOR(x)->length;
             if (i > 0) {
                 putc(' ', stdout);
             }
-            MAKEFIXNUM(j, i);
+            MAKEFIX(j, i);
 L           a = elt(x, j);
 L           write_form(a);
         }
