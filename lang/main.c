@@ -14,980 +14,900 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.      *
  ******************************************************************************/
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <limits.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
+typedef int fixnum_t;
+typedef struct val val_t;
 
-#define VEC_MIN_SIZE    (8)
+#define FIXNUM_MIN      (INT_MIN)
+#define FIXNUM_MAX      (INT_MAX)
+#define VEC_MIN_SIZE    (16)
 #define HASH_DEPTH      (16)
-#define HASH_TOMBSTONE  ((unsigned int)-1)
-#define HASH_EMPTY      ((unsigned int)0)
 #define GC_MIN_BATCH    (100)
 #define GC_MAX_BATCH    (10000)
 
-
-void die(const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    fflush(stdout);
-    fputs("die: ", stderr);
-    vfprintf(stderr, format, args);
-    putc('\n', stderr);
-    fflush(stderr);
-    abort();
-    va_end(args);
-}
-
-
-int lisp_istokenchar(int ch) {
-    switch (ch) {
-    case '!': case '$': case '%': case '&':
-    case '*': case '+': case '-': case '/':
-    case ':': case '<': case '=': case '>':
-    case '?': case '@': case '^': case '_':
-    case '~':
-        return 1;
-    default:
-        if (ch >= '0' && ch <= '9') {
-            return 1;
-        }
-        if (ch >= 'a' && ch <= 'z') {
-            return 1;
-        }
-        if (ch >= 'A' && ch <= 'Z') {
-            return 1;
-        }
-        return 0;
-    }
-}
-
-
 enum tag {
-    TAG_FIXNUM,
+    TAG_FIXNUM = 0,
     TAG_CHAR,
     TAG_CONS,
     TAG_STRING,
     TAG_SYMBOL,
     TAG_VECTOR,
-    TAG_HASHVEC,
     TAG_HASHTBL
 };
 
-
-const char *stag(int tag) {
-    switch (tag) {
-    case TAG_FIXNUM:
-        return "FIXNUM";
-    case TAG_CHAR:
-        return "CHAR";
-    case TAG_CONS:
-        return "CONS";
-    case TAG_STRING:
-        return "STRING";
-    case TAG_SYMBOL:
-        return "SYMBOL";
-    case TAG_VECTOR:
-        return "VECTOR";
-    case TAG_HASHVEC:
-        return "HASHVEC";
-    case TAG_HASHTBL:
-        return "HASHTBL";
-    default:
-        return "INVALID";
-    }
-}
-
-
-typedef struct lispval {
-    int tag;
-    int fix;
+struct val {
+    enum tag tag;
+    fixnum_t fix;
     union object *ptr;
-} lispval_t;
+};
 
-
-struct obhead {
-    int tag;
+struct head {
+    enum tag tag;
     int mark;
+    unsigned int identity;
     union object *next;
     union object *back;
 };
 
-
 struct cons {
-    struct obhead head;
-    lispval_t car;
-    lispval_t cdr;
+    struct head head;
+    val_t car;
+    val_t cdr;
 };
-
 
 struct string {
-    struct obhead head;
-    lispval_t extend;
-    unsigned char *value;
-    int length;
-    int capacity;
+    struct head head;
+    unsigned char *slots;
+    fixnum_t length;
+    fixnum_t cap;
 };
-
 
 struct symbol {
-    struct obhead head;
-    unsigned int hash;
-    int length;
-    unsigned char *name;
+    struct head head;
+    val_t name;
 };
-
 
 struct vector {
-    struct obhead head;
-    int length;
-    int capacity;
-    lispval_t extend;
-    lispval_t *slots;
+    struct head head;
+    fixnum_t length;
+    fixnum_t cap;
+    val_t *slots;
 };
-
 
 struct hashcell {
-    unsigned int hash;
-    lispval_t key;
-    lispval_t val;
+    int present;
+    int tombstone;
+    val_t hc;
+    val_t key;
+    val_t val;
 };
 
-
-struct hashvec {
-    struct obhead head;
-    int capacity;
+struct hashtbl {
+    struct head head;
+    fixnum_t fill;
+    fixnum_t load;
+    fixnum_t cap;
     struct hashcell *slots;
 };
 
-
-struct hashtbl {
-    struct obhead head;
-    unsigned int hash;
-    int fill;
-    int load;
-    lispval_t hashvec;
-};
-
-
 union object {
-    struct obhead head;
+    struct head head;
     struct cons cons;
     struct string string;
     struct symbol symbol;
     struct vector vector;
-    struct hashvec hashvec;
     struct hashtbl hashtbl;
 };
 
 
-struct lisp_global {
-    union object *objs;
-    union object *mark;
-    union object **sweep;
-    lispval_t nil;
-    lispval_t t;
-    lispval_t eof;
-    lispval_t root;
-    unsigned int nyoung;
-    unsigned int nold;
-    unsigned int nexthash;
+struct frame {
+    struct frame *prevframe;
+    const char *name;
+    int line;
+    val_t **vars;
+    int nvars;
 };
 
+#define INIT_LOCAL      {TAG_FIXNUM, 0, 0}
 
-int lisp_tag(lispval_t x) {
-    return x.tag;
-}
+#define LOCAL0()                                                        \
+    struct frame frame;                                                 \
+    frame.prevframe = curframe;                                         \
+    frame.name = __func__;                                              \
+    frame.line = __LINE__;                                              \
+    frame.vars = NULL;                                                  \
+    frame.nvars = 0;                                                    \
+    curframe = &frame
 
+#define LOCAL1(a)                                                       \
+    val_t a = INIT_LOCAL;                                               \
+    val_t *localvars[1];                                                \
+    struct frame frame;                                                 \
+    localvars[0] = &a;                                                  \
+    frame.prevframe = curframe;                                         \
+    frame.name = __func__;                                              \
+    frame.line = __LINE__;                                              \
+    frame.vars = localvars;                                             \
+    frame.nvars = 1;                                                    \
+    curframe = &frame
 
-int lisp_eq(lispval_t x, lispval_t y) {
-    return x.tag == y.tag && x.fix == y.fix && x.ptr == y.ptr;
-}
+#define LOCAL2(a, b)                                                    \
+    val_t a = INIT_LOCAL;                                               \
+    val_t b = INIT_LOCAL;                                               \
+    val_t *localvars[2];                                                \
+    struct frame frame;                                                 \
+    localvars[0] = &a;                                                  \
+    localvars[1] = &b;                                                  \
+    frame.prevframe = curframe;                                         \
+    frame.name = __func__;                                              \
+    frame.line = __LINE__;                                              \
+    frame.vars = localvars;                                             \
+    frame.nvars = 2;                                                    \
+    curframe = &frame
 
+#define LOCAL3(a, b, c)                                                 \
+    val_t a = INIT_LOCAL;                                               \
+    val_t b = INIT_LOCAL;                                               \
+    val_t c = INIT_LOCAL;                                               \
+    val_t *localvars[3];                                                \
+    struct frame frame;                                                 \
+    localvars[0] = &a;                                                  \
+    localvars[1] = &b;                                                  \
+    localvars[2] = &c;                                                  \
+    frame.prevframe = curframe;                                         \
+    frame.name = __func__;                                              \
+    frame.line = __LINE__;                                              \
+    frame.vars = localvars;                                             \
+    frame.nvars = 3;                                                    \
+    curframe = &frame
 
-lispval_t makesymbol(struct lisp_global *g, const unsigned char *s, int n);
+#define DEFINE0(func)                                                   \
+static val_t func(void)
+#define DEFINE1(func, a)                                                \
+static val_t func(val_t a)
+#define DEFINE2(func, a, b)                                             \
+static val_t func(val_t a, val_t b)
+#define DEFINE3(func, a, b, c)                                          \
+static val_t func(val_t a, val_t b, val_t c)
 
+#define RETURN(x)                                                       \
+    do { curframe = frame.prevframe; return (x); } while (0)
 
-struct lisp_global *makeglobal(void) {
-    struct lisp_global *g;
-    g = (struct lisp_global *)malloc(sizeof(*g));
-    if (g == NULL) {
-        die("OUT OF MEMORY");
+#define DECLARE(x)
+
+#define L       do { frame.line = __LINE__; } while(0);
+
+#define TAG(x)          ((x).tag)
+
+#define MAKEFIXNUM(x, f)                                                \
+                        ((x).tag = TAG_FIXNUM, (x).fix = (f), (x).ptr = 0)
+#define MAKECHAR(x, f)  ((x).tag = TAG_CHAR, (x).fix = (f), (x).ptr = 0)
+
+#define EQ(x, y)        ((x).tag == (y).tag && (x).fix == (y).fix &&    \
+                            (x).ptr == (y).ptr)
+
+#define CHECK_TAG(x, t) (TAG((x)) != (t) ? die("EXPECTED " #t) : (void)0)
+
+#define FIXNUM(x)       (CHECK_TAG((x), TAG_FIXNUM), (x).fix)
+#define CHAR(x)         (CHECK_TAG((x), TAG_CHAR), (x).fix)
+#define CONS(x)         (CHECK_TAG((x), TAG_CONS), &(x).ptr->cons)
+#define STRING(x)       (CHECK_TAG((x), TAG_STRING), &(x).ptr->string)
+#define SYMBOL(x)       (CHECK_TAG((x), TAG_SYMBOL), &(x).ptr->symbol)
+#define VECTOR(x)       (CHECK_TAG((x), TAG_VECTOR), &(x).ptr->vector)
+#define HASHTBL(x)      (CHECK_TAG((x), TAG_HASHTBL), &(x).ptr->hashtbl)
+
+#define IDENTITY(x)     ((x).ptr->head.identity)
+
+#define RBARRIER(o, v)
+#define WBARRIER(o, v)
+
+DECLARE(FIXNUM)
+DECLARE(CHAR)
+DECLARE(CONS)
+DECLARE(STRING)
+DECLARE(SYMBOL)
+DECLARE(VECTOR)
+DECLARE(HASHTBL)
+
+#define INTERN(cname, name)                                             \
+static struct string cname##_str = {                                    \
+    {TAG_STRING, 0, 0, 0, 0},                                           \
+    (unsigned char *)name,                                              \
+    sizeof(name) - 1,                                                   \
+    sizeof(name) - 1                                                    \
+};                                                                      \
+static struct symbol cname##_sym = {                                    \
+    {TAG_SYMBOL, 0, 0, 0, 0},                                           \
+    {TAG_STRING, 0, (union object *)&cname##_str}                       \
+};                                                                      \
+static val_t cname = {TAG_SYMBOL, 0, (union object *)&cname##_sym}
+
+static struct frame *curframe;
+static union object *gcobjs;
+static union object *gcmark;
+static union object **gcsweep;
+INTERN(nil, "nil");
+INTERN(t, "t");
+INTERN(eof, "+eof+");
+INTERN(quote, "quote");
+INTERN(qquote, "quasiquote");
+INTERN(unquote, "unquote");
+INTERN(sunquote, "unquote-splicing");
+static val_t memo;
+static unsigned long nyoung;
+static unsigned long nold;
+static unsigned long identity;
+
+DECLARE(die)
+static void die(const char *message) {
+    struct frame *frame;
+    fflush(stdout);
+    fprintf(stderr, "die: %s\n", message);
+    fprintf(stderr, "Backtrace (most recent call first):\n");
+    for (frame = curframe; frame != NULL; frame = frame->prevframe) {
+        fprintf(stderr, "  %s:%d\n", frame->name, frame->line);
     }
-    g->objs = NULL;
-    g->mark = NULL;
-    g->sweep = NULL;
-    g->nyoung = 0;
-    g->nold = 0;
-    g->nexthash = 0;
-    g->nil = makesymbol(g, (unsigned char *)"nil", 3);
-    g->t = makesymbol(g, (unsigned char *)"t", 1);
-    g->eof = makesymbol(g, (unsigned char *)"+eof+", 5);
-    g->root = g->nil;
-    return g;
+    fflush(stderr);
+    abort();
 }
 
-
-void sweep1(struct lisp_global *g) {
-    union object *obj;
-    obj = *g->sweep;
-    if (obj == NULL) {
-        g->sweep = NULL;
-        return;
-    }
-    if (obj->head.mark) {
-        obj->head.mark = 0;
-        g->sweep = &obj->head.next;
-        g->nold += 1;
-    } else {
-        *g->sweep = obj->head.next;
-        /* free(obj); TODO mark on the C stack. */
-    }
+static void inc_gc(void) {
 }
 
-
-void mark(struct lisp_global *g, lispval_t x) {
+DECLARE(alloc)
+static val_t alloc(enum tag tag) {
+    val_t ret;
     union object *o;
-    if (lisp_tag(x) < TAG_CONS) {
-        return;
-    }
-    o = x.ptr;
-    if (o->head.mark) {
-        return;
-    }
-    o->head.mark = 1;
-    o->head.back = g->mark;
-    g->mark = o;
-}
 
+    inc_gc();
 
-void mark1(struct lisp_global *g) {
-    union object *obj;
-    int i;
-    obj = g->mark;
-    g->mark = obj->head.back;
-    switch (obj->head.tag) {
+    switch (tag) {
     case TAG_CONS:
-        mark(g, obj->cons.car);
-        mark(g, obj->cons.cdr);
+        o = (union object *)calloc(sizeof(struct cons), 1);
         break;
     case TAG_STRING:
+        o = (union object *)calloc(sizeof(struct string), 1);
         break;
     case TAG_SYMBOL:
+        o = (union object *)calloc(sizeof(struct symbol), 1);
         break;
     case TAG_VECTOR:
-        mark(g, obj->vector.extend);
-        for (i = 0; i < obj->vector.capacity; i++) {
-            mark(g, obj->vector.slots[i]);
-        }
-        break;
-    case TAG_HASHVEC:
-        for (i = 0; i < obj->hashvec.capacity; i++) {
-            mark(g, obj->hashvec.slots[i].key);
-            mark(g, obj->hashvec.slots[i].val);
-        }
+        o = (union object *)calloc(sizeof(struct vector), 1);
         break;
     case TAG_HASHTBL:
-        mark(g, obj->hashtbl.hashvec);
-        break;
-    case TAG_FIXNUM:
+        o = (union object *)calloc(sizeof(struct hashtbl), 1);
         break;
     default:
-        die("INVALID TAG %s at %p", stag(obj->head.tag), (void *)obj);
-    }
-}
-
-
-void markroots(struct lisp_global *g) {
-    mark(g, g->nil);
-    mark(g, g->t);
-    mark(g, g->eof);
-    mark(g, g->root);
-}
-
-
-void collect(struct lisp_global *g, int full) {
-    unsigned int i;
-
-    if (g->sweep == NULL) {
-        if (full == 0 && (g->nyoung < g->nold || g->nyoung < GC_MIN_BATCH)) {
-            return;
-        }
-
-        g->sweep = &g->objs;
-        g->nold = 0;
-        g->nyoung = 0;
-
-        markroots(g);
+        die("Invalid tag");
     }
 
-    for (i = 0; (full != 0 || i < GC_MAX_BATCH) && g->sweep != NULL; i++) {
-        if (g->mark != NULL) {
-            mark1(g);
-        } else {
-            sweep1(g);
-        }
+    if (o == NULL) {
+        die("Out of memory");
     }
-}
 
+    o->head.tag = tag;
+    o->head.mark = 0;
+    o->head.identity = identity & FIXNUM_MAX;
+    o->head.next = gcobjs;
+    o->head.back = NULL;
 
-void freeglobal(struct lisp_global *g) {
-    collect(g, 1);
-    free(g);
-}
+    gcobjs = o;
+    identity += 1;
+    nyoung += 1;
 
-
-lispval_t makeobj(struct lisp_global *g, int tag, size_t size) {
-    lispval_t ret;
-    collect(g, 0);
     ret.tag = tag;
     ret.fix = 0;
-    ret.ptr = (union object *)malloc(size);
-    if (ret.ptr == NULL) {
-        die("OUT OF MEMORY");
-    }
-    ret.ptr->head.tag = tag;
-    ret.ptr->head.mark = 0;
-    ret.ptr->head.next = g->objs;
-    ret.ptr->head.back = NULL;
-    g->objs = ret.ptr;
-    g->nyoung += 1;
+    ret.ptr = o;
+
     return ret;
 }
 
+DEFINE2(cons, a, d) {
+    LOCAL2(ret, z);
+L   ret = alloc(TAG_CONS);
 
-lispval_t makecons(struct lisp_global *g, lispval_t a, lispval_t d) {
-    lispval_t ret;
-    ret = makeobj(g, TAG_CONS, sizeof(ret.ptr->cons));
-    ret.ptr->cons.car = a;
-    ret.ptr->cons.cdr = d;
-    return ret;
+    MAKEFIXNUM(z, 0);
+L   CONS(ret)->car = z;
+L   CONS(ret)->cdr = z;
+
+L   CONS(ret)->car = a;
+    WBARRIER(ret, a);
+
+L   CONS(ret)->cdr = d;
+    WBARRIER(ret, d);
+
+    RETURN(ret);
 }
 
-
-void expect_tag(lispval_t x, int tag) {
-    if (lisp_tag(x) != tag) {
-        die("TYPE ERROR EXPECTED %s", stag(tag));
+DEFINE1(car, x) {
+    LOCAL1(a);
+    if (EQ(x, nil)) {
+        RETURN(nil);
     }
+L   a = CONS(x)->car;
+    RBARRIER(x, a);
+    RETURN(a);
 }
 
-
-void rplaca(struct lisp_global *g, lispval_t x, lispval_t a) {
-    (void) g;
-    expect_tag(x, TAG_CONS);
-    x.ptr->cons.car = a;
+DEFINE2(rplaca, x, a) {
+    LOCAL0();
+L   CONS(x)->car = a;
+    WBARRIER(x, a);
+    RETURN(x);
 }
 
-
-void rplacd(struct lisp_global *g, lispval_t x, lispval_t d) {
-    (void) g;
-    expect_tag(x, TAG_CONS);
-    x.ptr->cons.cdr = d;
-}
-
-
-lispval_t car(struct lisp_global *g, lispval_t x) {
-    (void) g;
-    expect_tag(x, TAG_CONS);
-    return x.ptr->cons.car;
-}
-
-
-lispval_t cdr(struct lisp_global *g, lispval_t x) {
-    (void) g;
-    expect_tag(x, TAG_CONS);
-    return x.ptr->cons.cdr;
-}
-
-
-lispval_t makestring(struct lisp_global *g, int cap) {
-    lispval_t ret;
-    if (cap < VEC_MIN_SIZE) {
-        cap = VEC_MIN_SIZE;
+DEFINE1(cdr, x) {
+    LOCAL1(d);
+    if (EQ(x, nil)) {
+        RETURN(nil);
     }
-    ret = makeobj(g, TAG_STRING, sizeof(ret.ptr->string) + cap);
-    memset(&ret.ptr->string + 1, 0, cap);
-    ret.ptr->string.extend = g->nil;
-    ret.ptr->string.value = (unsigned char *)(&ret.ptr->string + 1);
-    ret.ptr->string.capacity = cap;
-    ret.ptr->string.length = 0;
-    return ret;
+L   d = CONS(x)->cdr;
+    RBARRIER(x, d);
+    RETURN(d);
 }
 
 
-int lisp_strcap(struct lisp_global *g, lispval_t x) {
-    expect_tag(x, TAG_STRING);
-    if (!lisp_eq(x.ptr->string.extend, g->nil)) {
-        x = x.ptr->string.extend;
+DEFINE2(rplacd, x, d) {
+    LOCAL0();
+L   CONS(x)->cdr = d;
+    WBARRIER(x, d);
+    RETURN(x);
+}
+
+DEFINE0(make_string) {
+    LOCAL1(ret);
+L   ret = alloc(TAG_STRING);
+L   STRING(ret)->slots = 0;
+L   STRING(ret)->length = 0;
+L   STRING(ret)->cap = 0;
+    RETURN(ret);
+}
+
+DEFINE0(make_vector) {
+    LOCAL1(ret);
+L   ret = alloc(TAG_VECTOR);
+L   VECTOR(ret)->slots = 0;
+L   VECTOR(ret)->length = 0;
+L   VECTOR(ret)->cap = 0;
+    RETURN(ret);
+}
+
+DEFINE1(vector_extend, v) {
+    fixnum_t cap, newcap;
+    void *ptr;
+    LOCAL0();
+    if (TAG(v) == TAG_VECTOR) {
+L       cap = VECTOR(v)->cap;
+L       if (VECTOR(v)->length < cap) {
+            RETURN(v);
+        }
+
+        newcap = cap;
+        if (newcap < VEC_MIN_SIZE) {
+            newcap = VEC_MIN_SIZE;
+        } else if (newcap > FIXNUM_MAX / 2 / (fixnum_t)sizeof(val_t)) {
+L           die("Vector too large");
+        }
+        newcap *= 2;
+
+L       ptr = realloc(VECTOR(v)->slots, newcap * sizeof(val_t));
+        if (ptr == NULL) {
+L           die("Out of memory");
+        }
+
+L       VECTOR(v)->slots = (val_t *)ptr;
+L       VECTOR(v)->cap = newcap;
+
+        for (; cap < newcap; cap++) {
+L           VECTOR(v)->slots[cap] = nil;
+        }
+    } else if (TAG(v) == TAG_STRING) {
+L       cap = STRING(v)->cap;
+L       if (STRING(v)->length < cap) {
+            RETURN(v);
+        }
+
+        newcap = cap;
+        if (newcap < VEC_MIN_SIZE) {
+            newcap = VEC_MIN_SIZE;
+        } else if (cap > FIXNUM_MAX / 2) {
+L           die("String too large");
+        }
+        newcap *= 2;
+
+L       ptr = realloc(STRING(v)->slots, newcap);
+        if (ptr == NULL) {
+L           die("Out of memory");
+        }
+
+L       STRING(v)->slots = (unsigned char *)ptr;
+L       STRING(v)->cap = newcap;
+
+        for (; cap < newcap; cap++) {
+L           STRING(v)->slots[cap] = 0;
+        }
+    } else {
+L       die("Type error: expected a string or vector");
     }
-    return x.ptr->string.capacity;
+    RETURN(v);
 }
 
-
-int lisp_strlen(struct lisp_global *g, lispval_t x) {
-    (void) g;
-    expect_tag(x, TAG_STRING);
-    return x.ptr->string.length;
-}
-
-
-void lisp_strextend(struct lisp_global *g, lispval_t x) {
-    lispval_t e;
-    int i;
-    int cap;
-    expect_tag(x, TAG_STRING);
-    cap = lisp_strcap(g, x);
-    if (cap > INT_MAX / 2) {
-        die("STRING TOO LARGE");
+DEFINE2(vector_push_extend, x, v) {
+    fixnum_t length;
+    int ch;
+    LOCAL1(ret);
+L   vector_extend(v);
+    if (TAG(v) == TAG_VECTOR) {
+L       length = VECTOR(v)->length;
+L       VECTOR(v)->slots[length] = x;
+        MAKEFIXNUM(ret, length);
+        length += 1;
+L       VECTOR(v)->length = length;
+        WBARRIER(v, x);
+    } else if (TAG(v) == TAG_STRING) {
+L       length = STRING(v)->length;
+L       ch = CHAR(x);
+L       STRING(v)->slots[length] = ch;
+        MAKEFIXNUM(ret, length);
+        length += 1;
+L       STRING(v)->length = length;
+    } else {
+L       die("Type error. Expected a string or vector.");
     }
-    e = makestring(g, cap * 2);
-    for (i = 0; i < cap; i++) {
-        e.ptr->string.value[i] = x.ptr->string.value[i];
+    RETURN(ret);
+}
+
+DEFINE1(vector_length, v) {
+    fixnum_t length;
+    LOCAL1(ret);
+    if (TAG(v) == TAG_VECTOR) {
+L       length = VECTOR(v)->length;
+    } else if (TAG(v) == TAG_STRING) {
+L       length = STRING(v)->length;
+    } else {
+L       die("Type error. Expected a string or vector.");
     }
-    x.ptr->string.extend = e;
-    x.ptr->string.value = e.ptr->string.value;
+    MAKEFIXNUM(ret, length);
+    RETURN(ret);
 }
 
-
-void lisp_strpush(struct lisp_global *g, lispval_t x, int ch) {
-    int cap;
-    expect_tag(x, TAG_STRING);
-    cap = lisp_strcap(g, x);
-    if (x.ptr->string.length == cap) {
-        lisp_strextend(g, x);
+DEFINE2(elt, v, i) {
+    fixnum_t length;
+    fixnum_t index;
+    int ch;
+    LOCAL1(a);
+    if (TAG(v) == TAG_VECTOR) {
+L       length = VECTOR(v)->length;
+L       index = FIXNUM(i);
+        if (index < 0 || index > length) {
+L           die("Index out of bounds");
+        }
+L       a = VECTOR(v)->slots[index];
+        RBARRIER(v, a);
+    } else if (TAG(v) == TAG_STRING) {
+L       length = STRING(v)->length;
+L       index = FIXNUM(i);
+        if (index < 0 || index > length) {
+L           die("Index out of bounds");
+        }
+L       ch = STRING(v)->slots[index];
+        MAKECHAR(a, ch);
+    } else {
+L       die("Type error. Expected a string or vector.");
     }
-    x.ptr->string.value[x.ptr->string.length] = ch;
-    x.ptr->string.length += 1;
+    RETURN(a);
 }
 
-
-unsigned char *lisp_str(struct lisp_global *g, lispval_t x) {
-    (void) g;
-    expect_tag(x, TAG_STRING);
-    return x.ptr->string.value;
-}
-
-
-lispval_t makesymbol(struct lisp_global *g, const unsigned char *s, int n) {
-    lispval_t ret;
-    unsigned char *str;
-    ret = makeobj(g, TAG_SYMBOL, sizeof(ret.ptr->symbol) + n);
-    str = (unsigned char *)(&ret.ptr->symbol + 1);
-    ret.ptr->symbol.hash = g->nexthash;
-    g->nexthash += 1;
-    ret.ptr->symbol.name = str;
-    memcpy(str, s, n);
-    ret.ptr->symbol.length = n;
-    return ret;
-}
-
-
-lispval_t makevector(struct lisp_global *g, int cap) {
-    lispval_t ret;
-    int i;
-    if (cap < VEC_MIN_SIZE) {
-        cap = VEC_MIN_SIZE;
+/*
+DEFINE3(set_elt, v, i, a) {
+    fixnum_t length;
+    fixnum_t index;
+    int ch;
+    LOCAL0();
+    if (TAG(v) == TAG_VECTOR) {
+L       length = VECTOR(v)->length;
+L       index = FIXNUM(i);
+        if (index < 0 || index > length) {
+L           die("Index out of bounds");
+        }
+L       VECTOR(v)->slots[index] = a;
+        WBARRIER(v, a);
+    } else if (TAG(v) == TAG_STRING) {
+L       length = STRING(v)->length;
+L       index = FIXNUM(i);
+        if (index < 0 || index > length) {
+L           die("Index out of bounds");
+        }
+L       ch = CHAR(a);
+L       STRING(v)->slots[index] = ch;
+    } else {
+L       die("Type error. Expected a string or vector.");
     }
-    ret = makeobj(g, TAG_VECTOR, sizeof(ret.ptr->vector) + cap * sizeof(lispval_t));
-    ret.ptr->vector.length = 0;
-    ret.ptr->vector.capacity = cap;
-    ret.ptr->vector.extend = g->nil;
-    ret.ptr->vector.slots = (lispval_t *)(&ret.ptr->vector + 1);
-    for (i = 0; i < cap; i++) {
-        ret.ptr->vector.slots[i] = g->nil;
+    RETURN(a);
+}
+*/
+
+DEFINE0(make_hashtbl) {
+    LOCAL1(ret);
+L   ret = alloc(TAG_HASHTBL);
+L   HASHTBL(ret)->fill = 0;
+L   HASHTBL(ret)->load = 0;
+L   HASHTBL(ret)->cap = 0;
+L   HASHTBL(ret)->slots = NULL;
+    RETURN(ret);
+}
+
+DEFINE2(hashval, val, depth) {
+    fixnum_t i, length;
+    unsigned int x;
+    LOCAL2(hc, a);
+
+L   if (FIXNUM(depth) > HASH_DEPTH) {
+        RETURN(hc);
     }
-    return ret;
-}
 
+    switch (TAG(val)) {
+    case TAG_FIXNUM:
+        RETURN(val);
 
-int lisp_veclen(struct lisp_global *g, lispval_t v) {
-    (void) g;
-    expect_tag(v, TAG_VECTOR);
-    return v.ptr->vector.length;
-}
+    case TAG_CHAR:
+L       x = CHAR(val);
+        MAKEFIXNUM(hc, x);
+        RETURN(hc);
 
+    case TAG_CONS:
+L       x = FIXNUM(depth);
+        x += 1;
+        MAKEFIXNUM(depth, x);
+        x = 2166136261;
+L       a = car(val);
+L       hc = hashval(a, depth);
+L       x = 6777619 * (FIXNUM(hc) ^ x);
+L       a = cdr(val);
+L       hc = hashval(a, depth);
+L       x = 6777619 * (FIXNUM(hc) ^ x);
+        MAKEFIXNUM(hc, x & FIXNUM_MAX);
+        RETURN(hc);
 
-int lisp_veccap(struct lisp_global *g, lispval_t v) {
-    (void) g;
-    expect_tag(v, TAG_VECTOR);
-    if (!lisp_eq(v.ptr->vector.extend, g->nil)) {
-        v = v.ptr->vector.extend;
+    case TAG_SYMBOL:
+        x = IDENTITY(val);
+        MAKEFIXNUM(hc, x);
+        RETURN(hc);
+
+    case TAG_STRING: case TAG_VECTOR:
+L       x = FIXNUM(depth);
+        x += 1;
+        MAKEFIXNUM(depth, x);
+L       hc = vector_length(val);
+L       length = FIXNUM(hc);
+        x = 2166136261;
+        for (i = 0; i < length; i++) {
+            MAKEFIXNUM(hc, i);
+L           a = elt(val, hc);
+L           hc = hashval(a, depth);
+L           x = 6777619 * (FIXNUM(hc) ^ x);
+        }
+        MAKEFIXNUM(hc, x & FIXNUM_MAX);
+        RETURN(hc);
+
+    case TAG_HASHTBL:
+        x = IDENTITY(val);
+        MAKEFIXNUM(hc, x);
+        RETURN(hc);
     }
-    return v.ptr->vector.capacity;
+
+L   die("Invalid tag");
+    RETURN(nil);
 }
 
+DEFINE1(sxhash, val) {
+    LOCAL2(ret, depth);
+    MAKEFIXNUM(depth, 0);
+L   ret = hashval(val, depth);
+    RETURN(ret);
+}
 
-lispval_t lisp_vecelt(struct lisp_global *g, lispval_t v, int i) {
-    int cap;
-    expect_tag(v, TAG_VECTOR);
-    cap = lisp_veccap(g, v);
-    if (i < 0 || i > cap) {
-        die("OUT OF BOUNDS");
+DEFINE2(equal, x, y) {
+    fixnum_t i, length;
+    LOCAL3(ret, a, b);
+
+    if (EQ(x, y)) {
+        RETURN(t);
     }
-    return v.ptr->vector.slots[i];
-}
 
-
-void lisp_vecset(struct lisp_global *g, lispval_t v, int i, lispval_t a) {
-    int cap;
-    expect_tag(v, TAG_VECTOR);
-    cap = lisp_veccap(g, v);
-    if (i < 0 || i > cap) {
-        die("OUT OF BOUNDS");
+    if (TAG(x) != TAG(y)) {
+        RETURN(nil);
     }
-    v.ptr->vector.slots[i] = a;
-}
 
+    switch (TAG(x)) {
+    case TAG_FIXNUM:
+        RETURN(nil);
 
-void lisp_vecextend(struct lisp_global *g, lispval_t v) {
-    lispval_t e;
-    int i;
-    int cap;
-    cap = lisp_veccap(g, v);
-    if (cap > INT_MAX / 2) {
-        die("VECTOR TOO LARGE");
+    case TAG_CHAR:
+        RETURN(nil);
+
+    case TAG_CONS:
+L       a = car(x);
+L       b = car(y);
+L       ret = equal(a, b);
+        if (EQ(ret, nil)) {
+            RETURN(ret);
+        }
+L       a = cdr(x);
+L       b = cdr(y);
+L       ret = equal(a, b);
+        RETURN(ret);
+
+    case TAG_STRING: case TAG_VECTOR:
+L       a = vector_length(x);
+L       b = vector_length(y);
+        if (!EQ(a, b)) {
+            RETURN(nil);
+        }
+L       length = FIXNUM(a);
+        ret = t;
+        for (i = 0; i < length; i++) {
+            MAKEFIXNUM(ret, i);
+L           a = elt(x, ret);
+L           b = elt(y, ret);
+L           ret = equal(a, b);
+            if (EQ(ret, nil)) {
+                break;
+            }
+        }
+        RETURN(ret);
+
+    case TAG_SYMBOL:
+        RETURN(nil);
+
+    case TAG_HASHTBL:
+        RETURN(nil);
     }
-    e = makevector(g, cap * 2);
-    for (i = 0; i < cap; i++) {
-        e.ptr->vector.slots[i] = v.ptr->vector.slots[i];
+
+L   die("invalid tag");
+    RETURN(nil);
+}
+
+DECLARE(HASH_FIND)
+#define HASH_FIND(tbl, hc, key, i, mask)                                \
+    do {                                                                \
+        hc = sxhash(key);                                               \
+        mask = (HASHTBL(tbl)->cap - 1);                                 \
+        i = FIXNUM(hc) & mask;                                          \
+        while (1) {                                                     \
+            if (HASHTBL(tbl)->slots[i].present) {                       \
+                if (                                                    \
+                    EQ(HASHTBL(tbl)->slots[i].hc, hc)                   \
+                    && !EQ(equal(HASHTBL(tbl)->slots[i].key, key), nil) \
+                ) {                                                     \
+                    break;                                              \
+                }                                                       \
+            } else if (!HASHTBL(tbl)->slots[i].tombstone) {             \
+                break;                                                  \
+            }                                                           \
+            i = (i * 5 + 1) & mask;                                     \
+        }                                                               \
+    } while (0)
+
+DEFINE1(hash_expand, tbl) {
+    unsigned int i, mask;
+    fixnum_t fill, load, cap, newcap, j;
+    struct hashcell *slots, *newslots;
+    LOCAL2(hc, key);
+
+L   fill = HASHTBL(tbl)->fill;
+L   load = HASHTBL(tbl)->load;
+L   cap = HASHTBL(tbl)->cap;
+L   slots = HASHTBL(tbl)->slots;
+
+    if (load * 4 < cap * 3 && fill * 2 >= load) {
+        RETURN(nil);
     }
-    v.ptr->vector.extend = e;
-    v.ptr->vector.slots = e.ptr->vector.slots;
-}
 
-
-void lisp_vecpush(struct lisp_global *g, lispval_t v, lispval_t a) {
-    int len;
-    int cap;
-    expect_tag(v, TAG_VECTOR);
-    len = v.ptr->vector.length;
-    cap = lisp_veccap(g, v);
-    if (len == cap) {
-        lisp_vecextend(g, v);
+    if (fill > FIXNUM_MAX / 16) {
+L       die("Hash table too big");
     }
-    v.ptr->vector.slots[len] = a;
-    v.ptr->vector.length += 1;
-}
 
-
-lispval_t makehashvec(struct lisp_global *g, int n) {
-    lispval_t ret;
-    int i;
-    if ((n & (n - 1)) != 0) {
-        die("NOT A POWER OF TWO");
+    newcap = 1;
+    while (newcap < VEC_MIN_SIZE || newcap < (fill + (fill * 5 + 7) / 8)) {
+        newcap *= 2;
     }
-    ret = makeobj(g, TAG_HASHVEC, sizeof(ret.ptr->hashvec) + n * sizeof(*ret.ptr->hashvec.slots));
-    ret.ptr->hashvec.capacity = n;
-    ret.ptr->hashvec.slots = (struct hashcell *)(&ret.ptr->hashvec + 1);
-    for (i = 0; i < n; i++) {
-        ret.ptr->hashvec.slots[i].hash = HASH_EMPTY;
-        ret.ptr->hashvec.slots[i].key = g->nil;
-        ret.ptr->hashvec.slots[i].val = g->nil;
+
+    newslots = (struct hashcell *)calloc(newcap, sizeof(*newslots));
+    if (newslots == NULL) {
+L       die("Out of memory");
     }
-    return ret;
-}
 
+L   HASHTBL(tbl)->load = fill;
+L   HASHTBL(tbl)->cap = newcap;
+L   HASHTBL(tbl)->slots = newslots;
 
-lispval_t makehashtbl(struct lisp_global *g) {
-    lispval_t ret;
-    ret = makeobj(g, TAG_HASHTBL, sizeof(ret.ptr->hashtbl));
-    ret.ptr->hashtbl.hash = g->nexthash;
-    g->nexthash += 1;
-    ret.ptr->hashtbl.fill = 0;
-    ret.ptr->hashtbl.load = 0;
-    ret.ptr->hashtbl.hashvec = makehashvec(g, VEC_MIN_SIZE);
-    return ret;
-}
+    for (j = 0; j < cap; j++) {
+        if (!slots[j].present) {
+            continue;
+        }
 
-
-unsigned int fnv1a(const unsigned char *s, int length) {
-    unsigned int hash = 2166136261;
-    int i;
-    for (i = 0; i < length; i++) {
-        hash = 6777619 * (hash ^ s[i]);
+        key = slots[j].key;
+L       HASH_FIND(tbl, hc, key, i, mask);
+        newslots[i].present = 1;
+        newslots[i].tombstone = 1;
+        newslots[i].hc = hc;
+        newslots[i].key = key;
+        newslots[i].val = slots[j].val;
     }
-    return hash;
+
+    free(slots);
+    RETURN(nil);
 }
 
-
-int lisp_symlen(struct lisp_global *g, lispval_t x) {
-    (void)g;
-    expect_tag(x, TAG_SYMBOL);
-    return x.ptr->symbol.length;
-}
-
-
-const unsigned char *lisp_cname(struct lisp_global *g, lispval_t x) {
-    (void)g;
-    expect_tag(x, TAG_SYMBOL);
-    return x.ptr->symbol.name;
-}
-
-
-lispval_t makechar(struct lisp_global *g, int value) {
-    lispval_t ret;
-    (void)g;
-    ret.tag = TAG_CHAR;
-    ret.fix = value & 0xff;
-    ret.ptr = 0;
-    return ret;
-}
-
-
-int lisp_char(struct lisp_global *g, lispval_t x) {
-    (void)g;
-    expect_tag(x, TAG_CHAR);
-    return x.fix;
-}
-
-
-lispval_t makefixnum(struct lisp_global *g, int value) {
-    lispval_t ret;
-    (void)g;
-    ret.tag = TAG_FIXNUM;
-    ret.fix = value;
-    ret.ptr = 0;
-    return ret;
-}
-
-
-int lisp_fixnum(struct lisp_global *g, lispval_t x) {
-    (void)g;
-    expect_tag(x, TAG_FIXNUM);
-    return x.fix;
-}
-
-
-lispval_t cintern(struct lisp_global *g, const char *name) {
-    if (strcmp(name, "nil") == 0) {
-        return g->nil;
+DEFINE3(hash_get, tbl, key, def) {
+    fixnum_t i, mask;
+    LOCAL2(ret, hc);
+L   hash_expand(tbl);
+L   HASH_FIND(tbl, hc, key, i, mask);
+L   if (HASHTBL(tbl)->slots[i].present) {
+L       ret = HASHTBL(tbl)->slots[i].val;
+        RBARRIER(tbl, ret);
+        RETURN(ret);
     }
-    if (strcmp(name, "t") == 0) {
-        return g->t;
-    }
-    if (strcmp(name, "+eof+") == 0) {
-        return g->eof;
-    }
-    return makesymbol(g, (const unsigned char *)name, strlen(name));
+    RETURN(def);
 }
 
+DEFINE3(hash_set, tbl, key, val) {
+    unsigned int i, mask;
+    LOCAL1(hc);
+L   hash_expand(tbl);
+L   HASH_FIND(tbl, hc, key, i, mask);
+L   if (HASHTBL(tbl)->slots[i].present) {
+L       HASHTBL(tbl)->slots[i].val = val;
+        WBARRIER(tbl, val);
+        RETURN(val);
+    } else {
+L       if (!HASHTBL(tbl)->slots[i].tombstone) {
+L           HASHTBL(tbl)->load += 1;
+        }
+L       HASHTBL(tbl)->slots[i].hc = hc;
+L       HASHTBL(tbl)->slots[i].key = key;
+L       HASHTBL(tbl)->slots[i].val = val;
+L       HASHTBL(tbl)->slots[i].present = 1;
+L       HASHTBL(tbl)->slots[i].tombstone = 1;
+L       HASHTBL(tbl)->fill += 1;
+        WBARRIER(tbl, key);
+        WBARRIER(tbl, val);
+        RETURN(val);
+    }
+    RETURN(val);
+}
 
-lispval_t parsetoken(struct lisp_global *g, lispval_t str) {
+/*
+DEFINE3(hash_del, tbl, key, def) {
+    unsigned int i, mask;
+    LOCAL2(ret, hc);
+L   hash_expand(tbl);
+L   HASH_FIND(tbl, hc, key, i, mask);
+L   if (HASHTBL(tbl)->slots[i].present) {
+L       ret = HASHTBL(tbl)->slots[i].val;
+L       HASHTBL(tbl)->slots[i].hc = nil;
+L       HASHTBL(tbl)->slots[i].key = nil;
+L       HASHTBL(tbl)->slots[i].val = nil;
+L       HASHTBL(tbl)->slots[i].present = 0;
+L       HASHTBL(tbl)->fill -= 1;
+        RBARRIER(tbl, ret);
+        RETURN(ret);
+    }
+    RETURN(def);
+}
+*/
+
+DEFINE1(make_symbol, name) {
+    LOCAL1(ret);
+L   ret = alloc(TAG_SYMBOL);
+L   SYMBOL(ret)->name = name;
+    WBARRIER(ret, name);
+    RETURN(ret);
+}
+
+DEFINE1(intern, x) {
+    LOCAL2(s, z);
+
+    MAKEFIXNUM(z, 0);
+
+L   s = hash_get(memo, x, z);
+    if (!EQ(s, z)) {
+        RETURN(s);
+    }
+
+L   s = make_symbol(x);
+L   hash_set(memo, x, s);
+    RETURN(s);
+}
+
+DEFINE1(parse_token, x) {
     long int value;
-    int i = 0;
-    int length;
-    unsigned char *s;
-    char buffer[32];
+    fixnum_t i;
+    fixnum_t length;
+    const unsigned char *s;
+    char buf[32];
+    LOCAL1(ret);
 
-    length = lisp_strlen(g, str);
-    s = lisp_str(g, str);
+L   length = STRING(x)->length;
+L   s = STRING(x)->slots;
 
-    if (i < length && (s[i] == '-' || s[i] == '+')) {
-        i += 1;
+    if (length == 0) {
+L       die("Invalid token");
     }
 
-    while (i < length && (s[i] >= '0' && s[i] <= '9')) {
+    i = 0;
+    if (s[0] == '-' || s[0] == '+') {
+        buf[i] = s[i];
         i += 1;
     }
 
     if (i == length) {
-        if (i >= (int)sizeof(buffer)) {
-            die("FIXNUM OVERFLOW");
+L       ret = intern(x);
+        RETURN(ret);
+    }
+
+    while (i < length && s[i] >= '0' && s[i] <= '9') {
+        if (i < (fixnum_t)sizeof(buf)) {
+            buf[i] = s[i];
+        }
+        i += 1;
+    }
+
+    if (i == length) {
+        if (i >= (fixnum_t)sizeof(buf)) {
+L           die("Integer too large");
         }
 
-        memcpy(buffer, s, length);
-        buffer[length] = 0;
+        buf[i] = 0;
 
         errno = 0;
-        value = strtol(buffer, NULL, 10);
-        if (value > INT_MAX || value < INT_MIN || errno != 0) {
-            die("FIXNUM OVERFLOW");
+        value = strtol(buf, NULL, 10);
+        if (value < FIXNUM_MIN || value > FIXNUM_MAX || errno != 0) {
+L           die("Integer out of fixnum range");
         }
 
-        return makefixnum(g, value);
+        MAKEFIXNUM(ret, value);
+        RETURN(ret);
     }
 
-    if (length == 3 && memcmp(s, "nil", 3) == 0) {
-        return g->nil;
-    }
-
-    if (length == 1 && memcmp(s, "t", 1) == 0) {
-        return g->t;
-    }
-
-    return makesymbol(g, s, length);
+L   ret = intern(x);
+    RETURN(ret);
 }
 
-
-unsigned int
-lisp_hash(struct lisp_global *g, lispval_t k, int depth) {
-    const unsigned char *s;
-    int i;
-    int length;
-    unsigned hash = 257;
-
-    if (depth > HASH_DEPTH) {
-        return hash;
-    }
-
-    switch (lisp_tag(k)) {
-    case TAG_FIXNUM:
-        hash = lisp_fixnum(g, k);
-        break;
-
-    case TAG_CHAR:
-        hash = 17 * lisp_char(g, k);
-        break;
-
-    case TAG_CONS:
-        hash = lisp_hash(g, car(g, k), depth + 1);
-        hash ^= lisp_hash(g, cdr(g, k), depth + 1);
-        hash *= 13;
-        break;
-
-    case TAG_STRING:
-        s = lisp_str(g, k);
-        length = lisp_strlen(g, k);
-        hash = fnv1a(s, length);
-        break;
-
-    case TAG_SYMBOL:
-        hash = k.ptr->symbol.hash;
-        break;
-
-    case TAG_VECTOR:
-        length = lisp_veclen(g, k);
-        for (i = 0; i < length; i++) {
-            hash ^= lisp_hash(g, lisp_vecelt(g, k, i), depth + 1);
-            hash *= 65537;
-        }
-        break;
-
-    case TAG_HASHTBL:
-        hash = k.ptr->hashtbl.hash;
-        break;
-
-    default:
-        die("INVALID TAG %s at %p", stag(lisp_tag(k)), k.ptr);
-    }
-
-    if (hash == HASH_TOMBSTONE || hash == HASH_EMPTY) {
-        hash = 43;
-    }
-
-    return hash;
+DEFINE1(memorize, symbol) {
+    LOCAL1(name);
+L   name = SYMBOL(symbol)->name;
+L   hash_set(memo, name, symbol);
+    RBARRIER(symbol, name);
+    RETURN(nil);
 }
 
+DEFINE0(init) {
+    LOCAL2(str, c);
 
-int
-lisp_equal(struct lisp_global *g, lispval_t x, lispval_t y) {
-    const unsigned char *a;
-    const unsigned char *b;
-    int i;
-    int length;
+L   memo = make_hashtbl();
 
-    if (lisp_eq(x, y)) {
-        return 1;
-    }
+L   memorize(nil);
+L   memorize(t);
+L   memorize(eof);
+L   memorize(quote);
+L   memorize(qquote);
+L   memorize(unquote);
+L   memorize(sunquote);
 
-    if (lisp_tag(x) != lisp_tag(y)) {
-        return 0;
-    }
-
-    switch (lisp_tag(x)) {
-    case TAG_FIXNUM:
-        return 0;
-
-    case TAG_CHAR:
-        return 0;
-
-    case TAG_CONS:
-        if (lisp_equal(g, car(g, x), car(g, y)) == 0) {
-            return 0;
-        }
-        if (lisp_equal(g, cdr(g, x), cdr(g, y)) == 0) {
-            return 0;
-        }
-        return 1;
-
-    case TAG_STRING:
-        a = lisp_str(g, x);
-        b = lisp_str(g, y);
-        length = lisp_strlen(g, x);
-        if (length != lisp_strlen(g, y)) {
-            return 0;
-        }
-        for (i = 0; i < length; i++) {
-            if (a[i] != b[i]) {
-                return 0;
-            }
-        }
-        return 1;
-
-    case TAG_SYMBOL:
-        return 0;
-
-    case TAG_VECTOR:
-        length = lisp_veclen(g, x);
-        if (length != lisp_veclen(g, y)) {
-            return 0;
-        }
-        for (i = 0; i < length; i++) {
-            if (lisp_equal(g, lisp_vecelt(g, x, i), lisp_vecelt(g, y, i)) == 0) {
-                return 0;
-            }
-        }
-        return 1;
-
-    case TAG_HASHTBL:
-        return 0;
-
-    default:
-        die("INVALID TAG %s at %p", stag(lisp_tag(x)), x.ptr);
-        return 0;
-    }
+    RETURN(nil);
 }
 
-
-void hashexpand(struct lisp_global *g, struct hashtbl *h);
-
-
-struct hashcell *
-hashfind(struct lisp_global *g, struct hashtbl *h, lispval_t k, unsigned int hc, int *found) {
-    struct hashcell *cell = NULL;
-    struct hashcell *tombstone = NULL;
-    struct hashvec *v = &h->hashvec.ptr->hashvec;
-    unsigned int i = 0;
-    unsigned int mask = 0;
-    *found = 0;
-    mask = v->capacity - 1;
-    for (i = hc & mask; ; i = (i * 5 + 1) & mask) {
-        cell = &v->slots[i];
-        if (cell->hash == HASH_EMPTY && tombstone != NULL) {
-            return tombstone;
-        } else if (cell->hash == HASH_EMPTY) {
-            return cell;
-        } else if (cell->hash == HASH_TOMBSTONE && tombstone == NULL) {
-            tombstone = cell;
-        } else if (cell->hash == hc && lisp_equal(g, cell->key, k)) {
-            *found = 1;
-            return cell;
-        }
-    }
-}
-
-
-void hashexpand(struct lisp_global *g, struct hashtbl *h) {
-    lispval_t nv;
-    struct hashvec *v = &h->hashvec.ptr->hashvec;
-    struct hashcell *cell;
-    int i;
-    int n;
-    int f;
-    int found;
-
-    if (h->load * 4 < v->capacity * 3 && h->fill * 2 >= h->load) {
-        return;
-    }
-
-    if (h->fill > INT_MAX / 16) {
-        die("hash table too big");
-    }
-
-    f = h->fill + (h->fill * 5 + 7) / 8;
-    n = VEC_MIN_SIZE;
-    while (f > n) {
-        n *= 2;
-    }
-
-    nv = makehashvec(g, n);
-    h->hashvec = nv;
-    h->load = h->fill;
-
-    for (i = 0; i < v->capacity; i++) {
-        if (v->slots[i].hash == HASH_EMPTY || v->slots[i].hash == HASH_TOMBSTONE) {
-            continue;
-        }
-        cell = hashfind(g, h, v->slots[i].key, v->slots[i].hash, &found);
-        cell->hash = v->slots[i].hash;
-        cell->key = v->slots[i].key;
-        cell->val = v->slots[i].val;
-    }
-}
-
-
-lispval_t
-hashget(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
-    int found;
-    unsigned int hc;
-    struct hashcell *cell;
-    struct hashtbl *ht;
-    expect_tag(h, TAG_HASHTBL);
-    ht = &h.ptr->hashtbl;
-    hashexpand(g, ht);
-    hc = lisp_hash(g, k, 0);
-    cell = hashfind(g, ht, k, hc, &found);
-    if (found) {
-        return cell->val;
-    }
-    return d;
-}
-
-
-void
-hashset(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t v) {
-    int found;
-    unsigned int hc;
-    struct hashcell *cell;
-    struct hashtbl *ht;
-    expect_tag(h, TAG_HASHTBL);
-    ht = &h.ptr->hashtbl;
-    hashexpand(g, ht);
-    hc = lisp_hash(g, k, 0);
-    cell = hashfind(g, ht, k, hc, &found);
-    if (cell->hash == HASH_EMPTY) {
-        ht->load += 1;
-        ht->fill += 1;
-    } else if (cell->hash == HASH_TOMBSTONE) {
-        ht->fill += 1;
-    }
-    cell->hash = hc;
-    cell->key = k;
-    cell->val = v;
-}
-
-
-lispval_t
-hashpop(struct lisp_global *g, lispval_t h, lispval_t k, lispval_t d) {
-    int found;
-    unsigned int hc;
-    struct hashcell *cell;
-    struct hashtbl *ht;
-    expect_tag(h, TAG_HASHTBL);
-    ht = &h.ptr->hashtbl;
-    hashexpand(g, ht);
-    hc = lisp_hash(g, k, 0);
-    cell = hashfind(g, ht, k, hc, &found);
-    if (found) {
-        ht->fill -= 1;
-        d = cell->val;
-        cell->hash = HASH_TOMBSTONE;
-        cell->key = g->nil;
-        cell->val = g->nil;
-    }
-    return d;
-}
-
-
-int munch_whitespace(FILE *file)
-{
+static int munch(void) {
     int ch;
     while (1) {
-        ch = getc(file);
+        ch = getc(stdin);
         switch (ch) {
         case ' ': case '\t': case '\v': case '\f': case '\r': case '\n':
             break;
@@ -1004,205 +924,263 @@ int munch_whitespace(FILE *file)
     }
 }
 
-
-lispval_t lisp_read(struct lisp_global *g, int expect)
-{
+DEFINE0(read_form) {
     int ch;
-    lispval_t obj;
-    lispval_t tail;
-    lispval_t token;
+    LOCAL3(ret, tail, val);
 
-    while (1) {
-        ch = munch_whitespace(stdin);
+    ch = munch();
 
-        switch (ch) {
-        case EOF:
-            if (expect) {
-                die("EXPECTED VALUE GOT END OF FILE");
+    switch (ch) {
+    case EOF:
+        RETURN(eof);
+
+    case '(':
+        ch = munch();
+        if (ch == ')') {
+            RETURN(nil);
+        }
+
+L       tail = cons(nil, nil);
+        ret = tail;
+        while (1) {
+            ungetc(ch, stdin);
+
+L           val = read_form();
+            if (EQ(val, eof)) {
+L               die("Expected )");
             }
-            return g->eof;
 
-        case '(':
-            ch = munch_whitespace(stdin);
+L           rplaca(tail, val);
+
+            ch = munch();
             if (ch == ')') {
-                return g->nil;
+                break;
             }
 
-            obj = makecons(g, g->nil, g->nil);
-            tail = obj;
+            if (ch == '.') {
+L               val = read_form();
+                if (EQ(val, eof)) {
+L                   die("Expected form in cdr place");
+                }
 
+L               rplacd(tail, val);
+
+                ch = munch();
+                if (ch != ')') {
+L                   die("Expected ) after cdr place");
+                }
+
+                break;
+            }
+
+L           val = cons(nil, nil);
+L           rplacd(tail, val);
+            tail = val;
+        }
+        RETURN(ret);
+
+    case ')':
+L       die("Extra )");
+        RETURN(nil);
+
+    case '\'':
+L       val = read_form();
+        if (EQ(val, eof)) {
+L           die("Expected form after '");
+        }
+L       tail = cons(val, nil);
+L       ret = cons(quote, tail);
+        RETURN(ret);
+
+    case '`':
+L       val = read_form();
+        if (EQ(val, eof)) {
+L           die("Expected form after `");
+        }
+L       tail = cons(val, nil);
+L       ret = cons(qquote, tail);
+        RETURN(ret);
+
+    case ',':
+        ch = getc(stdin);
+        if (ch == '@') {
+L           val = read_form();
+            if (EQ(val, eof)) {
+L               die("Expected form after ,@");
+            }
+L           tail = cons(val, nil);
+L           ret = cons(sunquote, tail);
+        } else {
+            ungetc(ch, stdin);
+L           val = read_form();
+            if (EQ(val, eof)) {
+L               die("Expected form after ,");
+            }
+L           tail = cons(val, nil);
+L           ret = cons(unquote, tail);
+        }
+        RETURN(ret);
+
+    case '"':
+L       ret = make_string();
+        while (1) {
+            ch = getc(stdin);
+
+            if (ch == '"') {
+                break;
+            }
+
+            if (ch == '\\') {
+                ch = getc(stdin);
+            }
+
+            if (ch == EOF) {
+L               die("Expected \"");
+            }
+
+            MAKECHAR(val, ch);
+L           vector_push_extend(val, ret);
+        }
+        RETURN(ret);
+
+    case '#':
+        ch = getc(stdin);
+        switch (ch) {
+        case '(':
+L           ret = make_vector();
             while (1) {
-                ungetc(ch, stdin);
-                rplaca(g, tail, lisp_read(g, 1));
-
-                ch = munch_whitespace(stdin);
+                ch = munch();
                 if (ch == ')') {
                     break;
-                } else if (ch == '.') {
-                    rplacd(g, tail, lisp_read(g, 1));
-                    ch = munch_whitespace(stdin);
-                    if (ch != ')') {
-                        die("EXPECTED ) AFTER CDR VALUE");
-                    }
-                    break;
-                } else {
-                    rplacd(g, tail, makecons(g, g->nil, g->nil));
-                    tail = cdr(g, tail);
                 }
-            }
-            return obj;
 
-        case ')':
-            die("EXTRA CLOSING PARENTHESIS");
-            break;
-
-        case '\'':
-            return makecons(g, cintern(g, "quote"), makecons(g, lisp_read(g, 1), g->nil));
-
-        case '`':
-            return makecons(g, cintern(g, "quasiquote"), makecons(g, lisp_read(g, 1), g->nil));
-
-        case ',':
-            ch = getc(stdin);
-            if (ch == '@') {
-                obj = cintern(g, "unquote-splicing");
-            } else {
-                obj = cintern(g, "unquote");
                 ungetc(ch, stdin);
-            }
-            return makecons(g, obj, makecons(g, lisp_read(g, 1), g->nil));
+L               val = read_form();
+                if (EQ(val, eof)) {
+L                   die("Expected )");
+                }
 
-        case '"':
-            token = makestring(g, 0);
-            while (1) {
-                ch = getc(stdin);
-                if (ch == '"') {
-                    break;
-                }
-                if (ch == '\\') {
-                    ch = getc(stdin);
-                }
-                if (ch == EOF) {
-                    die("EXPECTED \" GOT END OF FILE");
-                }
-                lisp_strpush(g, token, ch);
+L               vector_push_extend(val, ret);
             }
-            return token;
-
-        case '#':
-            ch = getc(stdin);
-            if (ch == '(') {
-                obj = makevector(g, 0);
-                while (1) {
-                    ch = munch_whitespace(stdin);
-                    if (ch == ')') {
-                        break;
-                    }
-                    ungetc(ch, stdin);
-                    lisp_vecpush(g, obj, lisp_read(g, 1));
-                }
-            } else if (ch == '\\') {
-                ch = getc(stdin);
-                obj = makechar(g, ch);
-                ch = munch_whitespace(stdin);
-                if (lisp_istokenchar(ch)) {
-                    die("INVALID CHARACTER %c", ch);
-                }
-                ungetc(ch, stdin);
-            } else {
-                die("UNKNOWN DISPATCHING MACRO CHARACTER %c", ch);
-            }
-            return obj;
-
+            RETURN(ret);
 
         default:
-            if (!lisp_istokenchar(ch)) {
-                die("INVALID CHARACTER %c", ch);
+L           die("Unknown dispatching macro character");
+            RETURN(ret);
+        }
+
+    default:
+L       tail = make_string();
+        while (1) {
+            switch (ch) {
+            case '!': case '$': case '%': case '&':
+            case '*': case '+': case '-': case '/':
+            case ':': case '<': case '=': case '>':
+            case '?': case '@': case '^': case '_':
+            case '~':
+                break;
+
+            default:
+                if (ch >= '0' && ch <= '9') {
+                    break;
+                }
+
+                if (ch >= 'a' && ch <= 'z') {
+                    break;
+                }
+
+                if (ch >= 'A' && ch <= 'Z') {
+                    break;
+                }
+
+                ungetc(ch, stdin);
+L               ret = parse_token(tail);
+                RETURN(ret);
             }
-            token = makestring(g, 0);
-            do {
-                lisp_strpush(g, token, ch);
-                ch = getc(stdin);
-            } while (lisp_istokenchar(ch));
-            ungetc(ch, stdin);
-            return parsetoken(g, token);
+
+            MAKECHAR(val, ch);
+L           vector_push_extend(val, tail);
+            ch = getc(stdin);
         }
     }
 }
 
+DEFINE1(eval, x) {
+    LOCAL0();
+    RETURN(x);
+}
 
-void lisp_write(struct lisp_global *g, lispval_t x) {
-    lispval_t a, d;
+DEFINE1(write_form, x) {
+    unsigned long i, length;
     const unsigned char *s;
-    int i;
-    int length;
-    int ch;
+    LOCAL3(l, a, j);
 
-    switch (lisp_tag(x)) {
+    switch (TAG(x)) {
     case TAG_FIXNUM:
-        printf("%d", lisp_fixnum(g, x));
-        break;
+L       printf("%d", FIXNUM(x));
+        RETURN(x);
 
     case TAG_CHAR:
-        printf("#\\%c", x.fix);
-        break;
+L       printf("#\\%c", CHAR(x));
+        RETURN(x);
 
     case TAG_CONS:
         putc('(', stdout);
+        l = x;
         while (1) {
-            a = car(g, x);
-            d = cdr(g, x);
-            lisp_write(g, a);
-            if (lisp_eq(d, g->nil)) {
+L           a = car(l);
+L           write_form(a);
+
+L           l = cdr(l);
+            if (EQ(l, nil)) {
                 break;
-            } else if (lisp_tag(d) != TAG_CONS) {
-                fputs(" . ", stdout);
-                lisp_write(g, d);
-                break;
-            } else {
-                putc(' ', stdout);
-                x = d;
             }
+
+            if (TAG(l) != TAG_CONS) {
+                putc(' ', stdout);
+                putc('.', stdout);
+                putc(' ', stdout);
+L               write_form(l);
+                break;
+            }
+
+            putc(' ', stdout);
         }
         putc(')', stdout);
-        break;
+        RETURN(x);
 
     case TAG_STRING:
         putc('"', stdout);
-        length = lisp_strlen(g, x);
-        s = lisp_str(g, x);
-        i = 0;
-        while (i < length) {
-            ch = s[i];
-            if (ch == '\"' || ch == '\\') {
+L       length = STRING(x)->length;
+L       s = STRING(x)->slots;
+        for (i = 0; i < length; i++) {
+            if (s[i] == '\\' || s[i] == '"') {
                 putc('\\', stdout);
             }
-            putc(ch, stdout);
-            i += 1;
+            putc(s[i], stdout);
         }
         putc('"', stdout);
-        break;
+        RETURN(x);
 
     case TAG_SYMBOL:
-        length = lisp_symlen(g, x);
-        s = lisp_cname(g, x);
-        i = 0;
-        while (i < length) {
-            putc(s[i], stdout);
-            i += 1;
-        }
-        break;
+L       a = SYMBOL(x)->name;
+        RBARRIER(x, a);
+L       length = STRING(a)->length;
+L       s = STRING(a)->slots;
+        fwrite(s, length, 1, stdout);
+        RETURN(x);
 
     case TAG_VECTOR:
-        length = lisp_veclen(g, x);
         putc('#', stdout);
         putc('(', stdout);
+L       length = VECTOR(x)->length;
         for (i = 0; i < length; i++) {
             if (i > 0) {
                 putc(' ', stdout);
             }
-            a = lisp_vecelt(g, x, i);
-            lisp_write(g, a);
+            MAKEFIXNUM(j, i);
+L           a = elt(x, j);
+L           write_form(a);
         }
         putc(')', stdout);
         break;
@@ -1212,38 +1190,38 @@ void lisp_write(struct lisp_global *g, lispval_t x) {
         break;
 
     default:
-        die("INVALID TAG %s at %p", stag(lisp_tag(x)), x.ptr);
+L       die("Invalid value");
     }
+
+    RETURN(x);
 }
 
-
-lispval_t lisp_eval(struct lisp_global *g, lispval_t x) {
-    (void) g;
-    return x;
+DEFINE1(print, x) {
+    LOCAL0();
+L   write_form(x);
+    putc('\n', stdout);
+    RETURN(x);
 }
 
-
-void repl(struct lisp_global *g) {
-    lispval_t x;
+DEFINE0(repl) {
+    LOCAL2(x, y);
     while (1) {
-        x = lisp_read(g, 0);
-        if (lisp_eq(x, g->eof)) {
-            break;
+L       x = read_form();
+
+        if (EQ(x, eof)) {
+            RETURN(nil);
         }
-        x = lisp_eval(g, x);
-        lisp_write(g, x);
-        printf("\n");
-        fflush(stdout);
+
+L       y = eval(x);
+
+L       print(y);
     }
 }
-
 
 int main(int argc, char **argv) {
-    struct lisp_global *g;
     (void)argc;
     (void)argv;
-    g = makeglobal();
-    repl(g);
-    freeglobal(g);
+    init();
+    repl();
     return 0;
 }

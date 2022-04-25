@@ -25,13 +25,15 @@ set -ue
 : "${SOURCES:=main.c}"
 : "${TARGET:=main.out}"
 
-: "${CHKFLAGS:=--std=c89}"
-: "${CFLAGS:=-Wall -Wextra -pedantic -std=c89 -O1 -g}"
+: "${CHKFLAGS:=--std=c99}"
+: "${CFLAGS:=-Wall -Wextra -pedantic -std=c99 -O1 -g}"
 : "${SANFLAGS=}"
 
 build() {
     ${CHK} ${CHKFLAGS} ${SOURCES}
+    ./check.awk ${SOURCES}
     ${CC} ${CFLAGS} -o "${TARGET}" ${SOURCES}
+    rm -f vgcore*
     ${SAN} "./${TARGET}" < check.lisp
 }
 
