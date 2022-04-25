@@ -103,7 +103,6 @@ union object {
     struct hashtbl hashtbl;
 };
 
-
 struct frame {
     struct frame *prevframe;
     const char *name;
@@ -883,8 +882,8 @@ L   ret = intern(x);
 DEFINE1(memorize, symbol) {
     LOCAL1(name);
 L   name = SYMBOL(symbol)->name;
-L   hash_set(memo, name, symbol);
     RBARRIER(symbol, name);
+L   hash_set(memo, name, symbol);
     RETURN(nil);
 }
 
