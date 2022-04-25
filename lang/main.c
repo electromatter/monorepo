@@ -24,7 +24,7 @@ typedef struct val val_t;
 
 #define FIXNUM_MIN      (INT_MIN)
 #define FIXNUM_MAX      (INT_MAX)
-#define VEC_MIN_SIZE    (16)
+#define VEC_MIN_SIZE    (8)
 #define HASH_DEPTH      (16)
 #define GC_MIN_BATCH    (100)
 #define GC_MAX_BATCH    (10000)
@@ -225,7 +225,6 @@ static struct symbol cname##_sym = {                                    \
 };                                                                      \
 static val_t cname = {TAG_SYMBOL, 0, (union object *)&cname##_sym}
 
-static struct frame *curframe;
 static union object *gcobjs;
 static union object *gcmark;
 static union object **gcsweep;
@@ -237,6 +236,13 @@ INTERN(qquote, "quasiquote");
 INTERN(unquote, "unquote");
 INTERN(sunquote, "unquote-splicing");
 static val_t memo;
+static val_t *globals[] = {
+    &nil, &t, &eof, &quote, &qquote, &unquote, &sunquote, &memo
+};
+struct frame global_frame = {
+    NULL, "<global>", __LINE__, globals, sizeof(globals) / sizeof(*globals)
+};
+static struct frame *curframe = &global_frame;
 static unsigned long nyoung;
 static unsigned long nold;
 static unsigned long identity;
