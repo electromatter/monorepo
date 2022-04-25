@@ -200,8 +200,8 @@ static val_t func(val_t a, val_t b, val_t c)
 
 #define IDENTITY(x)     ((x).ptr->head.identity)
 
-#define RBARRIER(o, v)
-#define WBARRIER(o, v)
+#define RBARRIER(o, v)  do { mark(o); mark(v); } while (0)
+#define WBARRIER(o, v)  do { mark(o); mark(v); } while (0)
 
 DECLARE(FIXNUM)
 DECLARE(CHAR)
@@ -259,7 +259,142 @@ static void die(const char *message) {
     abort();
 }
 
-static void inc_gc(void) {
+static void mark(val_t x) {
+    if (TAG(x) < TAG_CONS || x.ptr->head.mark) {
+        return;
+    }
+    x.ptr->head.mark = 1;
+    x.ptr->head.back = gcmark;
+    gcmark = x.ptr;
+}
+
+static void mark_stack(void) {
+    struct frame *frame;
+    int i;
+    for (frame = curframe; frame != NULL; frame = frame->prevframe) {
+        for (i = 0; i < frame->nvars; i++) {
+            mark(*frame->vars[i]);
+        }
+    }
+}
+
+static void free_obj(union object *o) {
+    switch (o->head.tag) {
+    case TAG_FIXNUM:
+        break;
+
+    case TAG_CHAR:
+        break;
+
+    case TAG_CONS:
+        free(o);
+        return;
+
+    case TAG_STRING:
+        free(o->string.slots);
+        free(o);
+        return;
+
+    case TAG_SYMBOL:
+        free(o);
+        return;
+
+    case TAG_VECTOR:
+        free(o->vector.slots);
+        free(o);
+        return;
+
+    case TAG_HASHTBL:
+        free(o->hashtbl.slots);
+        free(o);
+        return;
+    }
+
+    die("Invalid tag while sweeping heap");
+}
+
+static void sweep1(void) {
+    union object *o;
+    o = *gcsweep;
+    if (o == NULL) {
+        gcsweep = NULL;
+        return;
+    }
+
+    if (o->head.mark) {
+        o->head.mark = 0;
+        gcsweep = &o->head.next;
+        nold += 1;
+    } else {
+        *gcsweep = o->head.next;
+        free_obj(o);
+    }
+}
+
+static void mark1(void) {
+    union object *o;
+    int i;
+
+    o = gcmark;
+    gcmark = o->head.back;
+
+    switch (o->head.tag) {
+    case TAG_FIXNUM:
+        break;
+
+    case TAG_CHAR:
+        break;
+
+    case TAG_CONS:
+        mark(o->cons.car);
+        mark(o->cons.cdr);
+        return;
+
+    case TAG_STRING:
+        return;
+
+    case TAG_SYMBOL:
+        mark(o->symbol.name);
+        return;
+
+    case TAG_VECTOR:
+        for (i = 0; i < o->vector.cap; i++) {
+            mark(o->vector.slots[i]);
+        }
+        return;
+
+    case TAG_HASHTBL:
+        for (i = 0; i < o->hashtbl.cap; i++) {
+            if (o->hashtbl.slots[i].present) {
+                mark(o->hashtbl.slots[i].hc);
+                mark(o->hashtbl.slots[i].key);
+                mark(o->hashtbl.slots[i].val);
+            }
+        }
+        return;
+    }
+
+    die("Invalid tag while marking heap");
+}
+
+static void gc(int full) {
+    if (!full && (nyoung < nold || nyoung < GC_MIN_BATCH)) {
+        return;
+    }
+
+    mark_stack();
+
+    while (gcmark != NULL) {
+        mark1();
+    }
+
+    gcsweep = &gcobjs;
+    nold = 0;
+    nyoung = 0;
+
+    while (gcsweep != NULL) {
+        sweep1();
+    }
 }
 
 DECLARE(alloc)
@@ -267,7 +402,7 @@ static val_t alloc(enum tag tag) {
     val_t ret;
     union object *o;
 
-    inc_gc();
+    gc(0);
 
     switch (tag) {
     case TAG_CONS:
