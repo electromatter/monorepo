@@ -1,0 +1,23 @@
+; https://doi.org/10.1145/800257.808896
+
+.syntax program
+out1 = '*1' .out('g1')
+     / '*' .out('copy')
+     / .string .out('emit ' *)
+     ;
+lab1 = '*1' .out('l1')
+     / '*' .out('label')
+     ;
+output = ( '.out' '(' $ out1 ')' / '.label' lab1 ) .out('newline');
+ex3 = .id .out('call ' *)
+    / .string .out('match ' *)
+    / '.id' .out('id')
+    / '.string' .out('str')
+    / '(' ex1 ')'
+    / '$' .label *1 ex3 .out('bt ' *1) .out('set')
+    ;
+ex2 = ( ex3 .out('bf ' *1) / output ) $ ( ex3 .out('check') / output ) .label *1;
+ex1 = ex2 $ ( '/' .out('bt ' *1) ex2 ) .label *1;
+st = .id .label * '=' ex1 ';' .out('ret');
+program = '.syntax' .id .out('call ' *) .out('exit') $ st '.end';
+.end

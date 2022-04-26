@@ -1,0 +1,1035 @@
+; vim: set et :
+; Simple assembler seed binary.
+; Generates an amd64 ELF binary for Linux.
+
+; Start at file position 0, virtual position 0.
+7f . 45 . 4c . 46 .             ; magic
+02 .                            ; 64-bit
+01 .                            ; little-endian
+01 .                            ; magic
+00 .                            ; sysv abi
+00000000 i                      ; abi version
+00000000 i                      ; padding
+0002 h                          ; executable
+003e h                          ; amd64
+00000001 i                      ; magic
+[start] @ q                     ; entry point
+[program-header-offset] @ q     ; program header offset
+[section-header-offset] @ q     ; section header offset
+00000000 i                      ; flags
+0040 h                          ; elf header size
+0038 h                          ; program header size
+0003 h                          ; number of program headers
+0040 h                          ; section header size
+0004 h                          ; number of sections
+0001 h                          ; string section index
+
+; Save the offset at the start of the text section and adjust to 1M.
+[here] @ 0000000000100000 + [here] !
+
+[offset] @ [text-offset] !
+[offset] @ [program-header-offset] !
+[here] @ [text] !
+[here] @ [program-header] !
+
+00000006 i                      ; type 0=NULL  1=LOAD  6=PHDR
+00000004 i                      ; flags 1=EXECUTE 2=WRITE 4=READ
+[program-header-offset] @ q     ; file offset
+[program-header] @ q            ; virtual address
+0000000000000000 q              ; physical address
+[phend] @ [program-header] @ - q ; size in file
+[phend] @ [program-header] @ - q ; size in memory (extra bytes are zeroed)
+0000000000000008 q              ; alignment (offset = virtual mod alignment)
+
+; .text section
+00000001 i                      ; type 0=NULL  1=LOAD  6=PHDR
+00000005 i                      ; flags 1=EXECUTE 2=WRITE 4=READ
+[text-offset] @ q               ; file offset
+[text] @ q                      ; virtual address
+0000000000000000 q              ; physical address
+[text-end] @ [text] @ - q       ; size in file
+[text-end] @ [text] @ - q       ; size in memory (extra bytes are zeroed)
+0000000000001000 q              ; alignment (offset = virtual mod alignment)
+
+; 16M .bss section
+00000001 i                      ; type 0=NULL  1=LOAD  6=PHDR
+00000006 i                      ; flags 1=EXECUTE 2=WRITE 4=READ
+0000000000000000 q              ; file offset
+[bss] @ q                       ; virtual address
+0000000000000000 q              ; physical address
+0000000000000000 q              ; size in file
+[bss-end] @ [bss] @ - q         ; size in memory (extra bytes are zeroed)
+0000000000001000 q              ; alignment (offset = virtual mod alignment)
+
+[here] @ [phend] !
+
+[here] @ [sh] !
+[offset] @ [section-header-offset] !
+
+; null section
+00000000 i                      ; name
+00000000 i                      ; type 0=NULL 1=PROGBITS 2=SYMTAB 3=STRTAB
+0000000000000000 q              ; attributes 1=WRITE  2=ALLOC  4=EXECINSTR
+0000000000000000 q              ; address
+0000000000000000 q              ; offset
+0000000000000000 q              ; size
+00000000 i                      ; link
+00000000 i                      ; extra info
+0000000000000000 q              ; alignment
+0000000000000000 q              ; size of each entry
+
+; .shstrtab
+[str-shstrtab] @ i              ; name
+00000003 i                      ; type 0=NULL 1=PROGBITS 2=SYMTAB 3=STRTAB
+0000000000000000 q              ; attributes 1=WRITE  2=ALLOC  4=EXECINSTR
+0000000000000000 q              ; address
+[strtab-offset] @ q             ; offset
+[strtab-end] @ [strtab] @ - q   ; size
+00000000 i                      ; link
+00000000 i                      ; extra info
+0000000000000001 q              ; alignment
+0000000000000000 q              ; size of each entry
+
+;; .text
+[str-text] @ i                  ; name
+00000001 i                      ; type 0=NULL 1=PROGBITS 2=SYMTAB 3=STRTAB
+0000000000000006 q              ; attributes 1=WRITE  2=ALLOC  4=EXECINSTR
+[text] @ q                      ; address
+[text-offset] @ q               ; offset
+[text-end] @ [text] @ - q       ; size
+00000000 i                      ; link
+00000000 i                      ; extra info
+0000000000001000 q              ; alignment
+0000000000000000 q              ; size of each entry
+
+; .bss
+[str-bss] @ i                   ; name
+00000008 i                      ; type 0=NULL 1=PROGBITS 2=SYMTAB 3=STRTAB 8=NOBITS
+0000000000000003 q              ; attributes 1=WRITE  2=ALLOC  4=EXECINSTR
+[bss] @ q                       ; address
+0000000000000000 q              ; offset
+[bss-end] @ [bss] @ - q         ; size
+00000000 i                      ; link
+00000000 i                      ; extra info
+0000000000001000 q              ; alignment
+0000000000000000 q              ; size of each entry
+
+[here] @ [shend] !
+
+[here] @ [strtab] !
+[offset] @ [strtab-offset] !
+
+00 .
+
+; String table
+[here] @ [strtab] @ - [str-shstrtab] !
+[.shstrtab] s 00 .
+
+[here] @ [strtab] @ - [str-text] !
+[.text] s 00 .
+
+[here] @ [strtab] @ - [str-bss] !
+[.bss] s 00 .
+
+[here] @ [shere] !
+[here\]] s 00 .
+
+[here] @ [soffset] !
+[offset\]] s 00 .
+
+[here] @ [strtab-end] !
+
+;;;; Instruction encoding
+; (reg rm -- ) 64-bit reg-[rm]
+[
+  3 o 04 = [[rsp in rm] x] ?
+  3 o 05 = [[rbp in rm] x] ?
+  48 3 o 8 & [4 +] ? 4 o 8 & [1 +] ? .  ; rex.w
+  .                                     ; opcode
+  00 2 o 07 & 08 * + 3 o 07 & + .       ; modrm
+  2 p
+] [rmop] !
+
+; (reg rm -- ) 64-bit reg-reg direct
+[
+  48 3 o 8 & [4 +] ? 4 o 8 & [1 +] ? .  ; rex.w
+  .                                     ; opcode
+  c0 2 o 07 & 08 * + 3 o 07 & + .       ; modrm
+  2 p
+] [rrop] !
+
+;;;; Basic Instructions
+; [rax] @ [rbx] @ 1 [move] @ ?          ; means set R[rbx] to R[rax]
+; [rax] @ [rbx] @ 1 [cmp] @ ?           ; set flags so that jb means rax is below rbx
+
+; (imm reg -- )
+[
+  00 c7 1 [rrop] @ ?
+  1 o 80000000 + ffffffff00000000 &
+  [[Immediate overflow] x] ? i
+] [loadi] !                             ; mov r32, im32   c7 /0 id  load imm32
+
+; (str reg -- )
+[
+  00 c7 1 [rrop] @ ?
+  [here] @ [ib] !
+  [here] @ 2 t
+  s 00 . 00 . 00 .
+  [here] @ 2 t - 4 = ~ 1 & [[Immediate byte not a single character] x] ?
+] [loadib] !
+
+; (reg1 reg2 -- )
+[8a 1 [rmop] @ ?] [loadb] !
+[2 t 88 1 [rmop] @ ?] [storeb] !
+[8b 1 [rrop] @ ?] [move] !
+[8b 1 [rmop] @ ?] [load] !
+[2 t 89 1 [rmop] @ ?] [store]  !
+[03 1 [rrop] @ ?] [add] !
+[2b 1 [rrop] @ ?] [sub] !
+[39 1 [rrop] @ ?] [cmp] !
+[23 1 [rrop] @ ?] [and] !
+[0b 1 [rrop] @ ?] [or] !
+[33 1 [rrop] @ ?] [xor] !
+
+[
+  [rax] @ = ~ 01 & [[mul dest must be rdx:rax] x] ?
+  04 f7 1 [rrop] @ ?
+] [mul] !
+
+[
+  [rax] @ = ~ 01 & [[div dest must be rdx = rem rax = quot] x] ?
+  06 f7 1 [rrop] @ ?
+] [div] !
+
+[
+  2 t [rcx] @ = ~ 01 & [[shift must be rcx] x] ?
+  04 d3 1 [rrop] @ ?
+] [shl] !
+
+[
+  2 t [rcx] @ = ~ 01 & [[shift must be rcx] x] ?
+  05 d3 1 [rrop] @ ?
+] [shr] !
+
+; (reg -- )
+[02 f7 1 [rrop] @ ?] [not] !
+
+; (addr -- )
+[e9 . [here] @ - 04 - i] [jmp] !
+
+; (addr cc -- )
+[0f . 80 + . [here] @ - 04 - i] [jcc] !
+
+; ( -- )
+[0f . 05 .] [syscall] !
+[90 .] [nop] !
+[0f . 0b .] [ud2] !
+
+;;;; Conditions
+; (addr -- )
+[00 1 [jcc] @ ?] [jo] !
+[01 1 [jcc] @ ?] [jno] !
+[02 1 [jcc] @ ?] [jb] !  [02 1 [jcc] @ ?] [jc] !
+[03 1 [jcc] @ ?] [jae] ! [03 1 [jcc] @ ?] [jnc] !
+[04 1 [jcc] @ ?] [je] !
+[05 1 [jcc] @ ?] [jne] !
+[06 1 [jcc] @ ?] [jbe] !
+[07 1 [jcc] @ ?] [ja] !
+[08 1 [jcc] @ ?] [js] !
+[09 1 [jcc] @ ?] [jns] !
+[0c 1 [jcc] @ ?] [jl] !
+[0d 1 [jcc] @ ?] [jge] !
+[0e 1 [jcc] @ ?] [jle] !
+[0f 1 [jcc] @ ?] [jg] !
+
+;;;;; Registers
+00 [rax]! 01 [rcx]! 02 [rdx]! 03 [rbx]! 04 [rsp]! 05 [rbp]! 06 [rsi]! 07 [rdi]!
+08 [r8]!  09 [r9]!  0a [r10]! 0b [r11]! 0c [r12]! 0d [r13]! 0e [r14]! 0f [r15]!
+
+; Emit enough nops longer than the max instruction length so that disassemblers
+; can resynchronize with the real instruction stream.
+90 .  90 .  90 .  90 .  90 .  90 .  90 .  90 .
+90 .  90 .  90 .  90 .  90 .  90 .  90 .  90 .
+
+; Entry point
+[here] @ [start] !
+
+; read input
+
+[bss] @ [r14] @ 1 [loadi] @ ?           ; r14 is bottom of free space
+
+; Read source one byte at a time into a buffer at the start of free space
+[here] @ [read] !
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[r14] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+0000000000000000 [rdi] @ 1 [loadi] @ ?
+[r14] @ [rsi] @ 1 [move] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+0000000000000000 [rax] @ 1 [loadi] @ ?  ; read(fd:rdi, buf:rsi, len:rdx)
+1 [syscall] @ ?
+fffffffffffff000 [rdx] @ 1 [loadi] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [r14] @ 1 [add] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[read] @ 1 [jne] @ ?
+
+[dstack-top] @ [r15] @ 1 [loadi] @ ?    ; r15 is the data stack pointer
+[r14] @ [r13] @ 1 [move] @ ?            ; r13 is end of input and start of the dictionary
+[bss] @ [rsi] @ 1 [loadi] @ ?           ; rsi is the input pointer
+0000000000000000 [rdi] @ 1 [loadi] @ ?  ; rdi is the output pointer
+0000000000000000 [r12] @ 1 [loadi] @ ?  ; r12 is the output flag
+0000000000000000 [r10] @ 1 [loadi] @ ?  ; r10 is the hex value
+[cstack-top] @ [r9] @ 1 [loadi] @ ?     ; r9 is the control stack pointer
+                                        ; r8 is the end of the output
+                                        ; rax rdx rcx rbx are temporaries
+
+; Allocate dictionary entries for [here] and [offset]
+
+;; Helper macros for the interpreter
+; (addr -- ) getc from input into rax or jump to first argument if at eof
+[
+  [rsi] @ [r13] @ 1 [cmp] @ ?
+  1 [jae] @ ?
+  0000000000000000 [rax] @ 1 [loadi] @ ?
+  [rsi] @ [rax] @ 1 [loadb] @ ?
+  0000000000000001 [rdx] @ 1 [loadi] @ ?
+  [rdx] @ [rsi] @ 1 [add] @ ?
+] [getc] !
+
+; (imm addr -- ) if rax matches imm, then jump to addr
+[
+  2 t
+  [rdx] @ 1 [loadi] @ ?
+  [rax] @ [rdx] @ 1 [cmp] @ ?
+  1 [je] @ ?
+] [case] !
+
+; (str addr -- ) if rax matches single character immediate, then jump to addr
+[
+  2 t
+  [rdx] @ 1 [loadib] @ ?
+  [rax] @ [rdx] @ 1 [cmp] @ ?
+  1 [je] @ ?
+] [caseb] !
+
+; (reg -- )
+[
+  0000000000000008 [rdx] @ 1 [loadi] @ ?
+  [rdx] @ [r15] @ 1 [sub] @ ?
+  [dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+  [rdx] @ [r15] @ 1 [cmp] @ ?
+  [exit-failure] @ 1 [ja] @ ?
+  [r15] @ 1 [store] @ ?
+] [push] !
+
+; (reg --  )
+[
+  [dstack-top] @ [rdx] @ 1 [loadi] @ ?
+  [r15] @ [rdx] @ 1 [cmp] @ ?
+  [exit-failure] @ 1 [jae] @ ?
+  [r15] @ 2 t 1 [load] @ ?
+  0000000000000008 [rdx] @ 1 [loadi] @ ?
+  [rdx] @ [r15] @ 1 [add] @ ?
+] [pop] !
+
+[here] @ [interp] !
+
+[eof] @ 1 [getc] @ ?
+
+; Whitespace
+20 [interp] @ 1 [case] @ ?
+09 [interp] @ 1 [case] @ ?
+0a [interp] @ 1 [case] @ ?
+0b [interp] @ 1 [case] @ ?
+0c [interp] @ 1 [case] @ ?
+0d [interp] @ 1 [case] @ ?
+
+; Comment
+[;] [comment] @ 1 [caseb] @ ?
+
+; String
+[\[] [string] @ 1 [caseb] @ ?
+
+; Number
+[0] [hex0] @ 1 [caseb] @ ?
+[1] [hex0] @ 1 [caseb] @ ?
+[2] [hex0] @ 1 [caseb] @ ?
+[3] [hex0] @ 1 [caseb] @ ?
+[4] [hex0] @ 1 [caseb] @ ?
+[5] [hex0] @ 1 [caseb] @ ?
+[6] [hex0] @ 1 [caseb] @ ?
+[7] [hex0] @ 1 [caseb] @ ?
+[8] [hex0] @ 1 [caseb] @ ?
+[9] [hex0] @ 1 [caseb] @ ?
+[a] [hexa] @ 1 [caseb] @ ?
+[b] [hexa] @ 1 [caseb] @ ?
+[c] [hexa] @ 1 [caseb] @ ?
+[d] [hexa] @ 1 [caseb] @ ?
+[e] [hexa] @ 1 [caseb] @ ?
+[f] [hexa] @ 1 [caseb] @ ?
+[A] [hexA] @ 1 [caseb] @ ?
+[B] [hexA] @ 1 [caseb] @ ?
+[C] [hexA] @ 1 [caseb] @ ?
+[D] [hexA] @ 1 [caseb] @ ?
+[E] [hexA] @ 1 [caseb] @ ?
+[F] [hexA] @ 1 [caseb] @ ?
+
+; Meta Characters
+[\]] [doret] @ 1 [caseb] @ ?
+[?] [docall] @ 1 [caseb] @ ?
+[@] [doget] @ 1 [caseb] @ ?
+[!] [doset] @ 1 [caseb] @ ?
+[<] [dolt] @ 1 [caseb] @ ?
+[>] [dogt] @ 1 [caseb] @ ?
+[=] [doeq] @ 1 [caseb] @ ?
+[+] [doadd] @ 1 [caseb] @ ?
+[-] [dosub] @ 1 [caseb] @ ?
+[*] [domul] @ 1 [caseb] @ ?
+[/] [dodiv] @ 1 [caseb] @ ?
+[%] [domod] @ 1 [caseb] @ ?
+[&] [doand] @ 1 [caseb] @ ?
+[|] [door] @ 1 [caseb] @ ?
+[^] [doxor] @ 1 [caseb] @ ?
+[~] [donot] @ 1 [caseb] @ ?
+[l] [doshl] @ 1 [caseb] @ ?
+[r] [doshr] @ 1 [caseb] @ ?
+[.] [dobyte] @ 1 [caseb] @ ?
+[h] [doshort] @ 1 [caseb] @ ?
+[i] [doint] @ 1 [caseb] @ ?
+[q] [dolong] @ 1 [caseb] @ ?
+[s] [dostr] @ 1 [caseb] @ ?
+[p] [dopop] @ 1 [caseb] @ ?
+[o] [doover] @ 1 [caseb] @ ?
+[t] [doroll] @ 1 [caseb] @ ?
+[x] [doexcept] @ 1 [caseb] @ ?
+
+[exit-failure] @ 1 [jmp] @ ?
+
+; Read comment until a LF or CR
+[here] @ [comment] !
+[eof] @ 1 [getc] @ ?
+0a [interp] @ 1 [case] @ ?
+0d [interp] @ 1 [case] @ ?
+[comment] @ 1 [jmp] @ ?
+
+; Skip to the end of a string
+[here] @ [string] !
+[rsi] @ 1 [push] @ ?
+00 [rcx] @ 1 [loadi] @ ?
+
+[here] @ [string-char] !
+[exit-failure] @ 1 [getc] @ ?
+[\[] [string-up] @ 1 [caseb] @ ?
+[\]] [string-down] @ 1 [caseb] @ ?
+[\\] [string-escape] @ 1 [caseb] @ ?
+[string-char] @ 1 [jmp] @ ?
+
+[here] @ [string-up] !
+01 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [add] @ ?
+[string-char] @ 1 [jmp] @ ?
+
+[here] @ [string-down] !
+00 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [cmp] @ ?
+[interp] @ 1 [je] @ ?
+01 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [sub] @ ?
+[string-char] @ 1 [jmp] @ ?
+
+[here] @ [string-escape] !
+[exit-failure] @ 1 [getc] @ ?
+[string-char] @ 1 [jmp] @ ?
+
+; Hex digit 0-9
+[here] @ [hex0] !
+[0] [rdx] @ 1 [loadib] @ ?
+[rdx] @ [rax] @ 1 [sub] @ ?
+[hex] @ 1 [jmp] @ ?
+
+; Hex digit a-f
+[here] @ [hexa] !
+[a] [rdx] @ 1 [loadib] @ ?
+[rdx] @ [rax] @ 1 [sub] @ ?
+0a [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rax] @ 1 [add] @ ?
+[hex] @ 1 [jmp] @ ?
+
+; Hex digit A-F
+[here] @ [hexA] !
+[A] [rdx] @ 1 [loadib] @ ?
+[rdx] @ [rax] @ 1 [sub] @ ?
+0a [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rax] @ 1 [add] @ ?
+[hex] @ 1 [jmp] @ ?
+
+; General hex digit
+[here] @ [hex] !
+04 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [r10] @ 1 [shl] @ ?
+[rax] @ [r10] @ 1 [or] @ ?
+
+[exit-failure] @ 1 [getc] @ ?
+
+[0] [hex0] @ 1 [caseb] @ ?
+[1] [hex0] @ 1 [caseb] @ ?
+[2] [hex0] @ 1 [caseb] @ ?
+[3] [hex0] @ 1 [caseb] @ ?
+[4] [hex0] @ 1 [caseb] @ ?
+[5] [hex0] @ 1 [caseb] @ ?
+[6] [hex0] @ 1 [caseb] @ ?
+[7] [hex0] @ 1 [caseb] @ ?
+[8] [hex0] @ 1 [caseb] @ ?
+[9] [hex0] @ 1 [caseb] @ ?
+[a] [hexa] @ 1 [caseb] @ ?
+[b] [hexa] @ 1 [caseb] @ ?
+[c] [hexa] @ 1 [caseb] @ ?
+[d] [hexa] @ 1 [caseb] @ ?
+[e] [hexa] @ 1 [caseb] @ ?
+[f] [hexa] @ 1 [caseb] @ ?
+[A] [hexA] @ 1 [caseb] @ ?
+[B] [hexA] @ 1 [caseb] @ ?
+[C] [hexA] @ 1 [caseb] @ ?
+[D] [hexA] @ 1 [caseb] @ ?
+[E] [hexA] @ 1 [caseb] @ ?
+[F] [hexA] @ 1 [caseb] @ ?
+
+[r10] @ 1 [push] @ ?
+0000000000000000 [r10] @ 1 [loadi] @ ?
+
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rsi] @ 1 [sub] @ ?
+[interp] @ 1 [jmp] @ ?
+
+; Meta characters
+[here] @ [doret] !
+[cstack-top] @ [rdx] @ 1 [loadi] @ ?
+[r9] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[r9] @ [rsi] @ 1 [load] @ ?
+0000000000000008 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [r9] @ 1 [add] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [docall] !
+[rax] @ 1 [pop] @ ?
+[rcx] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[rcx] @ [rdx] @ 1 [cmp] @ ?
+[interp] @ 1 [je] @ ?
+0000000000000008 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [r9] @ 1 [sub] @ ?
+[cstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdx] @ [r9] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [ja] @ ?
+[rsi] @ [r9] @ 1 [store] @ ?
+[rax] @ [rsi] @ 1 [move] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doget] !
+[here] @ [doget-noent] !
+[rcx] @ 1 [pop] @ ?
+1 [ud2] @ ?
+0000000000000000 [rax] @ 1 [loadi] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doset] !
+[rax] @ 1 [pop] @ ?
+[rcx] @ 1 [pop] @ ?
+1 [ud2] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [dolt] !
+[rax] @ 1 [pop] @ ?
+[rcx] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [cmp] @ ?
+[push1] @ 1 [jb] @ ?
+[push0] @ 1 [jmp] @ ?
+
+[here] @ [dogt] !
+[rax] @ 1 [pop] @ ?
+[rcx] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [cmp] @ ?
+[push1] @ 1 [ja] @ ?
+[push0] @ 1 [jmp] @ ?
+
+[here] @ [doeq] !
+[rax] @ 1 [pop] @ ?
+[rcx] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [cmp] @ ?
+[push1] @ 1 [je] @ ?
+[push0] @ 1 [jmp] @ ?
+
+[here] @ [push1] !
+0000000000000001 [rax] @ 1 [loadi] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [push0] !
+0000000000000000 [rax] @ 1 [loadi] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doadd] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [add] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [dosub] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [sub] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [domul] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [mul] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [dodiv] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[rcx] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [je] @ ?
+[rcx] @ [rax] @ 1 [div] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [domod] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[rcx] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [je] @ ?
+[rcx] @ [rax] @ 1 [div] @ ?
+[rdx] @ [rax] @ 1 [move] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doand] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [and] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [door] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [or] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doxor] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [xor] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [donot] !
+[rax] @ 1 [pop] @ ?
+[rax] @ 1 [not] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doshl] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [shl] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doshr] !
+[rcx] @ 1 [pop] @ ?
+[rax] @ 1 [pop] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[rax] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [dobyte] !
+[rax] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[r12] @ [rdx] @ 1 [cmp] @ ?
+[outbyte] @ 1 [jne] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [outbyte] !
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doshort] !
+[rax] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[r12] @ [rdx] @ 1 [cmp] @ ?
+[outshort] @ 1 [jne] @ ?
+0000000000000002 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 2 [add] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [outshort] !
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doint] !
+[rax] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[r12] @ [rdx] @ 1 [cmp] @ ?
+[outint] @ 1 [jne] @ ?
+0000000000000004 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 2 [add] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [outint] !
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [dolong] !
+[rax] @ 1 [pop] @ ?
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[r12] @ [rdx] @ 1 [cmp] @ ?
+[outlong] @ 1 [jne] @ ?
+0000000000000008 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 2 [add] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [outlong] !
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+0000000000000008 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rax] @ 1 [shr] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [dostr] !
+[rbx] @ 1 [pop] @ ?
+00 [rcx] @ 1 [loadi] @ ?
+
+[here] @ [dostr-loop] !
+[rbx] @ [rax] @ 1 [loadb] @ ?
+01 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rbx] @ 1 [add] @ ?
+
+[\[] [rdx] @ 1 [loadib] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[dostr-up] @ 1 [je] @ ?
+
+[\]] [rdx] @ 1 [loadib] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[dostr-down] @ 1 [je] @ ?
+
+[\\] [rdx] @ 1 [loadib] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[dostr-escape] @ 1 [je] @ ?
+
+[dostr-char] @ 1 [jmp] @ ?
+
+[here] @ [dostr-up] !
+01 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [add] @ ?
+[dostr-char] @ 1 [jmp] @ ?
+
+[here] @ [dostr-down] !
+00 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [cmp] @ ?
+[interp] @ 1 [je] @ ?
+01 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [sub] @ ?
+[dostr-char] @ 1 [jmp] @ ?
+
+[here] @ [dostr-escape] !
+[rbx] @ [rax] @ 1 [loadb] @ ?
+01 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rbx] @ 1 [add] @ ?
+[dostr-char] @ 1 [jmp] @ ?
+
+[here] @ [dostr-char] !
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[r12] @ [rdx] @ 1 [cmp] @ ?
+[outstr-char] @ 1 [jne] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+[dostr-loop] @ 1 [jmp] @ ?
+
+[here] @ [outstr-char] !
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [rdi] @ 1 [storeb] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rdi] @ 1 [add] @ ?
+[dostr-loop] @ 1 [jmp] @ ?
+
+[here] @ [dopop] !
+[rcx] @ 1 [pop] @ ?
+[here] @ [pop1] !
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[rcx] @ [rdx] @ 1 [cmp] @ ?
+[interp] @ 1 [jbe] @ ?
+[rax] @ 1 [pop] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rcx] @ 1 [sub] @ ?
+[pop1] @ 1 [jmp] @ ?
+
+[here] @ [doover] !
+[rax] @ 1 [pop] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jb] @ ?
+[rdx] @ [rax] @ 1 [sub] @ ?
+[dstack-top] @ [rdx] @ 1 [loadi] @ ?
+[r15] @ [rdx] @ 1 [sub] @ ?
+0000000000000003 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rdx] @ 1 [shr] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rcx] @ [rax] @ 1 [shl] @ ?
+[r15] @ [rax] @ 1 [add] @ ?
+[rax] @ [rcx] @ 1 [load] @ ?
+[rcx] @ 1 [push] @ ?
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [doroll] !
+[rax] @ 1 [pop] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[interp] @ 1 [jb] @ ?
+[rdx] @ [rax] @ 1 [sub] @ ?
+[dstack-top] @ [rdx] @ 1 [loadi] @ ?
+[r15] @ [rdx] @ 1 [sub] @ ?
+0000000000000003 [rcx] @ 1 [loadi] @ ?
+[rcx] @ [rdx] @ 1 [shr] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [ja] @ ?
+[rcx] @ [rax] @ 1 [shl] @ ?
+[r15] @ [rax] @ 1 [add] @ ?
+[here] @ [roll1] !
+[rax] @ [r15] @ 1 [cmp] @ ?
+[interp] @ 1 [jbe] @ ?
+[rax] @ [rcx] @ 1 [move] @ ?
+0000000000000008 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [rax] @ 1 [sub] @ ?
+[rcx] @ [rdx] @ 1 [load] @ ?
+[rax] @ [rbx] @ 1 [load] @ ?
+[rbx] @ [rcx] @ 1 [store] @ ?
+[rdx] @ [rax] @ 1 [store] @ ?
+[roll1] @ 1 [jmp] @ ?
+
+[here] @ [doexcept] !
+[rcx] @ 1 [pop] @ ?
+[exit-failure] @ 1 [jmp] @ ?
+
+; Set the output flag to prime for output and do a second pass
+[here] @ [eof] !
+
+[dstack-top] @ [rdx] @ 1 [loadi] @ ?
+[rdx] @ [r15] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jne] @ ?
+
+[cstack-top] @ [rdx] @ 1 [loadi] @ ?
+[rdx] @ [r9] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jne] @ ?
+
+[rdi] @ [r8] @ 1 [move] @ ?
+
+0000000000000000 [rdx] @ 1 [loadi] @ ?
+[rdx] @ [r12] @ 1 [cmp] @ ?
+[write] @ 1 [jne] @ ?
+
+[dstack-bottom] @ [rdx] @ 1 [loadi] @ ?
+[r14] @ [rdx] @ 1 [sub] @ ?
+[rdi] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [ja] @ ?
+
+[bss] @ [rsi] @ 1 [loadi] @ ?
+0000000000000001 [r12] @ 1 [loadi] @ ?
+[r14] @ [rdi] @ 1 [move] @ ?
+
+[interp] @ 1 [jmp] @ ?
+
+[here] @ [write] !
+
+[r8] @ [r14] @ 1 [cmp] @ ?
+[close] @ 1 [je] @ ?
+
+; Write output
+0000000000000001 [rdi] @ 1 [loadi] @ ?
+[r14] @ [rsi] @ 1 [move] @ ?
+0000000000000001 [rdx] @ 1 [loadi] @ ?
+0000000000000001 [rax] @ 1 [loadi] @ ?  ; write(fd:rdi, buf:rsi, len:rdx)
+1 [syscall] @ ?
+fffffffffffff000 [rdx] @ 1 [loadi] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+[rax] @ [r14] @ 1 [add] @ ?
+[write] @ 1 [jmp] @ ?
+
+[here] @ [close] !
+
+; Close stdout and check for errors
+0000000000000001 [rdi] @ 1 [loadi] @ ?
+0000000000000003 [rax] @ 1 [loadi] @ ?  ; close(fd:rdi)
+1 [syscall] @ ?
+fffffffffffff000 [rdx] @ 1 [loadi] @ ?
+[rax] @ [rdx] @ 1 [cmp] @ ?
+[exit-failure] @ 1 [jae] @ ?
+
+[here] @ [exit-success] !
+0000000000000000 [rdi] @ 1 [loadi] @ ?
+[exit] @ 1 [jmp] @ ?
+
+[here] @ [exit-failure] !
+0000000000000001 [rdi] @ 1 [loadi] @ ?
+[exit] @ 1 [jmp] @ ?
+
+[here] @ [exit] !
+000000000000003c [rax] @ 1 [loadi] @ ?  ; exit(status:rdi)
+1 [syscall] @ ?
+[exit] @ 1 [jmp] @ ?
+
+; End of the text section
+[here] @ [text-end] !
+
+; Align to 4K
+[here] @ 1000 [here] @ - fff & + [here] !
+
+[here] @ [bss] !
+
+; Reserve 16M for buffers
+[here] @ 0000000001000000 + [here] !
+
+; Reserve 64K for the data stack
+[here] @ [dstack-bottom] !
+[here] @ 0000000000010000 + [here] !
+[here] @ [dstack-top] !
+
+; Reserve 64K for the control flow stack
+[here] @ [cstack-bottom] !
+[here] @ 0000000000001000 + [here] !
+[here] @ [cstack-top] !
+
+[here] @ [bss-end] !
