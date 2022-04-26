@@ -19,7 +19,7 @@ set -ue
 
 : "${PAGER:="less +F"}"  # less with follow scrolling
 : "${SIGNAL:=10}"        # SIGUSR1
-: "${TIMEOUT:=1}"        # build timeout
+: "${TIMEOUT:=5}"        # build timeout
 : "${DELAY:=1}"          # rebuild poll delay
 
 # Let the pager handle INT and SIGNAL.

@@ -1,3 +1,7 @@
+((lambda (x)
+  x) 1)
+
+
 "Simple \" strings"
 1234
 +144

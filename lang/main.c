@@ -263,34 +263,56 @@ static struct symbol cname##_sym = {                                    \
     {TAG_SYMBOL, 0, 0, 0, 0},                                           \
     {TAG_STRING, 0, (union object *)&cname##_str}                       \
 };                                                                      \
-static val_t cname = {TAG_SYMBOL, 0, (union object *)&cname##_sym}
+static val_t cname = {TAG_SYMBOL, 0, (union object *)&cname##_sym};
+
+#define INTERNS                                                         \
+    INTERN(nil, "nil")                                                  \
+    INTERN(t, "t")                                                      \
+    INTERN(eof, "+eof+")                                                \
+    INTERN(quote, "quote")                                              \
+    INTERN(qquote, "quasiquote")                                        \
+    INTERN(unquote, "unquote")                                          \
+    INTERN(sunquote, "unquote-splicing")
+
+#define GLOBAL(x) static val_t x;
+
+#define GLOBALS                                                         \
+    GLOBAL(undefined)                                                   \
+    GLOBAL(memo)                                                        \
+    GLOBAL(smacros)                                                     \
+    GLOBAL(macros)                                                      \
+    GLOBAL(environ)                                                     \
+    GLOBAL(functions)                                                   \
+    GLOBAL(labels)                                                      \
+    GLOBAL(blocks)
 
 static union object *gcobjs;
 static union object *gcmark;
 static union object **gcsweep;
-INTERN(nil, "nil");
-INTERN(t, "t");
-INTERN(eof, "+eof+");
-INTERN(quote, "quote");
-INTERN(qquote, "quasiquote");
-INTERN(unquote, "unquote");
-INTERN(sunquote, "unquote-splicing");
-static val_t undefined;
-static val_t memo;
-static val_t smacros;
-static val_t macros;
-static val_t environ;
-static val_t functions;
-static val_t labels;
-static val_t blocks;
+
+INTERNS
+GLOBALS
+
+#undef INTERN
+#define INTERN(x, s) #x,
+#undef GLOBAL
+#define GLOBAL(x) #x,
+
 static const char *gnames[] = {
-    "nil", "t", "eof", "quote", "qquote", "unquote", "sunquote", "memo",
-    "smacros", "macros", "environ", "functions", "labels", "blocks"
+    INTERNS
+    GLOBALS
 };
+
+#undef INTERN
+#define INTERN(x, s) &x,
+#undef GLOBAL
+#define GLOBAL(x) &x,
+
 static val_t *globals[] = {
-    &nil, &t, &eof, &quote, &qquote, &unquote, &sunquote, &memo,
-    &smacros, &macros, &environ, &functions, &labels, &blocks
+    INTERNS
+    GLOBALS
 };
+
 struct frame global_frame = {
     NULL,
     "<global>",
@@ -1138,6 +1160,9 @@ L   hash_set(memo, name, symbol);
     RETURN(nil);
 }
 
+#undef INTERN
+#define INTERN(x, s) L memorize(x);
+
 DEFINE0(init) {
     LOCAL1(h);
     PARAM0();
@@ -1156,19 +1181,10 @@ L   environ = cons(h, nil);
 L   h = make_hashtbl();
 L   functions = cons(h, nil);
 
-L   h = make_hashtbl();
 L   labels = nil;
-
-L   h = make_hashtbl();
 L   blocks = nil;
 
-L   memorize(nil);
-L   memorize(t);
-L   memorize(eof);
-L   memorize(quote);
-L   memorize(qquote);
-L   memorize(unquote);
-L   memorize(sunquote);
+    INTERNS
 
     RETURN(nil);
 }
@@ -1427,40 +1443,85 @@ L       e = cdr(e);
     }
 }
 
+DEFINE2(apply, fn, args) {
+    LOCAL1(x);
+    PARAM2(fn, args);
+L   die("TODO");
+    RETURN(x);
+}
 
-DEFINE1(eval, x) {
-    LOCAL3(expr, v, tbl);
+DEFINE1(macroexpand, x) {
+    LOCAL3(op, args, tbl);
     PARAM1(x);
-    expr = x;
     while (1) {
-        if (TAG(expr) == TAG_SYMBOL) {
+        if (TAG(x) == TAG_SYMBOL) {
             /* Symbol macros */
-L           tbl = find_tbl(smacros, expr);
-            if (!EQ(tbl, nil)) {
-L               v = hash_get(smacros, expr, nil);
-                expr = v;
-                continue;
+L           tbl = find_tbl(smacros, x);
+            if (EQ(tbl, nil)) {
+                break;
             }
+L           x = hash_get(tbl, x, nil);
+        } else if (TAG(x) == TAG_CONS) {
+L           op = car(x);
+L           args = cdr(x);
 
-            /* Do a variable lookup */
-L           tbl = find_tbl(environ, expr);
-            if (!EQ(tbl, nil)) {
-L               v = hash_get(environ, expr, nil);
-                RETURN(v);
-            }
-
-L           die("Variable is unset");
-        } else if (TAG(expr) == TAG_CONS) {
             /* Macro */
-            /* Special form */
-            /* Call */
-            RETURN(expr);
+L           tbl = find_tbl(macros, op);
+            if (EQ(tbl, nil)) {
+                break;
+            }
+L           op = hash_get(tbl, op, nil);
+L           x = apply(op, args);
         } else {
-            /* Literal values */
-            RETURN(expr);
+            /* Literal */
+            break;
         }
     }
+    RETURN(x);
 }
+
+DEFINE1(compile, x) {
+    LOCAL0();
+    PARAM1(x);
+L   x = macroexpand(x);
+    RETURN(x);
+}
+
+DEFINE1(eval, x) {
+    LOCAL2(fn, ret);
+    PARAM1(x);
+L   fn = compile(x);
+L   ret = apply(fn, nil);
+    RETURN(ret);
+}
+
+/*
+ * block
+ * catch
+ * eval-when
+ * flet
+ * function
+ * go
+ * if
+ * labels
+ * let
+ * let*
+ * load-time-value
+ * locally
+ * macrolet
+ * multiple-value-call
+ * multiple-value-prog1
+ * progn
+ * progv
+ * quote
+ * return-from
+ * setq
+ * symbol-macrolet
+ * tagbody
+ * the
+ * throw
+ * unwind-protect
+ */
 
 DEFINE1(write_form, x) {
     unsigned long i, length;
