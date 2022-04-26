@@ -30,7 +30,8 @@ typedef struct val val_t;
 #define GC_MAX_BATCH    (10000)
 
 enum tag {
-    TAG_FIXNUM = 0,
+    TAG_UNDEFINED = 0,
+    TAG_FIXNUM,
     TAG_CHAR,
     TAG_CONS,
     TAG_STRING,
@@ -107,62 +108,100 @@ struct frame {
     struct frame *prevframe;
     const char *name;
     int line;
+    const char **vnames;
     val_t **vars;
     int nvars;
+    const char *pnames[6];
+    val_t *params[6];
+    int nparams;
 };
 
-#define INIT_LOCAL      {TAG_FIXNUM, 0, 0}
+#define INIT_LOCAL      {TAG_UNDEFINED, 0, 0}
 
 #define LOCAL0()                                                        \
     struct frame frame;                                                 \
     frame.prevframe = curframe;                                         \
     frame.name = __func__;                                              \
     frame.line = __LINE__;                                              \
+    frame.vnames = NULL;                                                \
     frame.vars = NULL;                                                  \
     frame.nvars = 0;                                                    \
+    frame.nparams = 0;                                                  \
     curframe = &frame
 
 #define LOCAL1(a)                                                       \
     val_t a = INIT_LOCAL;                                               \
-    val_t *localvars[1];                                                \
     struct frame frame;                                                 \
-    localvars[0] = &a;                                                  \
+    val_t *localvars[1];                                                \
+    const char *localvarnames[] = {#a};                                 \
+    frame.vars = localvars;                                             \
+    frame.vnames = localvarnames;                                       \
+    frame.vars[0] = &a;                                                 \
     frame.prevframe = curframe;                                         \
     frame.name = __func__;                                              \
     frame.line = __LINE__;                                              \
-    frame.vars = localvars;                                             \
     frame.nvars = 1;                                                    \
+    frame.nparams = 0;                                                  \
     curframe = &frame
 
 #define LOCAL2(a, b)                                                    \
     val_t a = INIT_LOCAL;                                               \
     val_t b = INIT_LOCAL;                                               \
-    val_t *localvars[2];                                                \
     struct frame frame;                                                 \
-    localvars[0] = &a;                                                  \
-    localvars[1] = &b;                                                  \
+    val_t *localvars[2];                                                \
+    const char *localvarnames[] = {#a, #b};                             \
+    frame.vars = localvars;                                             \
+    frame.vnames = localvarnames;                                       \
+    frame.vars[0] = &a;                                                 \
+    frame.vars[1] = &b;                                                 \
     frame.prevframe = curframe;                                         \
     frame.name = __func__;                                              \
     frame.line = __LINE__;                                              \
-    frame.vars = localvars;                                             \
     frame.nvars = 2;                                                    \
+    frame.nparams = 0;                                                  \
     curframe = &frame
 
 #define LOCAL3(a, b, c)                                                 \
     val_t a = INIT_LOCAL;                                               \
     val_t b = INIT_LOCAL;                                               \
     val_t c = INIT_LOCAL;                                               \
-    val_t *localvars[3];                                                \
     struct frame frame;                                                 \
-    localvars[0] = &a;                                                  \
-    localvars[1] = &b;                                                  \
-    localvars[2] = &c;                                                  \
+    val_t *localvars[3];                                                \
+    const char *localvarnames[] = {#a, #b, #c};                         \
+    frame.vars = localvars;                                             \
+    frame.vnames = localvarnames;                                       \
+    frame.vars[0] = &a;                                                 \
+    frame.vars[1] = &b;                                                 \
+    frame.vars[2] = &c;                                                 \
     frame.prevframe = curframe;                                         \
     frame.name = __func__;                                              \
     frame.line = __LINE__;                                              \
-    frame.vars = localvars;                                             \
     frame.nvars = 3;                                                    \
     curframe = &frame
+
+#define PARAM0()                                                        \
+    frame.nparams = 0
+
+#define PARAM1(a)                                                       \
+    frame.params[0] = &a;                                               \
+    frame.pnames[0] = #a;                                               \
+    frame.nparams = 1
+
+#define PARAM2(a, b)                                                    \
+    frame.params[0] = &a;                                               \
+    frame.pnames[0] = #a;                                               \
+    frame.params[1] = &b;                                               \
+    frame.pnames[1] = #b;                                               \
+    frame.nparams = 2
+
+#define PARAM3(a, b, c)                                                 \
+    frame.params[0] = &a;                                               \
+    frame.pnames[0] = #a;                                               \
+    frame.params[1] = &b;                                               \
+    frame.pnames[1] = #b;                                               \
+    frame.params[2] = &c;                                               \
+    frame.pnames[2] = #c;                                               \
+    frame.nparams = 3
 
 #define DEFINE0(func)                                                   \
 static val_t func(void)
@@ -182,6 +221,7 @@ static val_t func(val_t a, val_t b, val_t c)
 
 #define TAG(x)          ((x).tag)
 
+#define MAKEUNDEF(x)    ((x).tag = TAG_UNDEFIEND, (x).fix = 0, (x).ptr = 0)
 #define MAKEFIX(x, f)   ((x).tag = TAG_FIXNUM, (x).fix = (f), (x).ptr = 0)
 #define MAKECHAR(x, f)  ((x).tag = TAG_CHAR, (x).fix = (f), (x).ptr = 0)
 
@@ -190,6 +230,7 @@ static val_t func(val_t a, val_t b, val_t c)
 
 #define CHECK_TAG(x, t) (TAG((x)) != (t) ? die("EXPECTED " #t) : (void)0)
 
+#define UNDEFINED(x)    (TAG((x)) == TAG_UNDEFINED)
 #define FIXNUM(x)       (CHECK_TAG((x), TAG_FIXNUM), (x).fix)
 #define CHAR(x)         (CHECK_TAG((x), TAG_CHAR), (x).fix)
 #define CONS(x)         (CHECK_TAG((x), TAG_CONS), &(x).ptr->cons)
@@ -234,26 +275,56 @@ INTERN(quote, "quote");
 INTERN(qquote, "quasiquote");
 INTERN(unquote, "unquote");
 INTERN(sunquote, "unquote-splicing");
+static val_t undefined;
 static val_t memo;
+static val_t smacros;
+static val_t macros;
+static val_t environ;
+static val_t functions;
+static val_t labels;
+static val_t blocks;
+static const char *gnames[] = {
+    "nil", "t", "eof", "quote", "qquote", "unquote", "sunquote", "memo",
+    "smacros", "macros", "environ", "functions", "labels", "blocks"
+};
 static val_t *globals[] = {
-    &nil, &t, &eof, &quote, &qquote, &unquote, &sunquote, &memo
+    &nil, &t, &eof, &quote, &qquote, &unquote, &sunquote, &memo,
+    &smacros, &macros, &environ, &functions, &labels, &blocks
 };
 struct frame global_frame = {
-    NULL, "<global>", __LINE__, globals, sizeof(globals) / sizeof(*globals)
+    NULL,
+    "<global>",
+    __LINE__,
+    gnames,
+    globals,
+    sizeof(globals) / sizeof(*globals),
+    {NULL, NULL, NULL, NULL, NULL, NULL},
+    {NULL, NULL, NULL, NULL, NULL, NULL},
+    0
 };
 static struct frame *curframe = &global_frame;
 static unsigned long nyoung;
 static unsigned long nold;
 static unsigned long identity;
 
+static FILE *out;
+static val_t write_form(val_t);
+
 DECLARE(die)
 static void die(const char *message) {
     struct frame *frame;
+    int i;
     fflush(stdout);
     fprintf(stderr, "die: %s\n", message);
     fprintf(stderr, "Backtrace (most recent call first):\n");
+    out = stderr;
     for (frame = curframe; frame != NULL; frame = frame->prevframe) {
-        fprintf(stderr, "  %s:%d\n", frame->name, frame->line);
+        fprintf(stderr, "  %s:%d  (", frame->name, frame->line);
+        for (i = 0; i < frame->nparams; i++) {
+            fprintf(stderr, i > 0 ? ", %s=" : "%s=", frame->pnames[i]);
+            write_form(*frame->params[i]);
+        }
+        fprintf(stderr, ")\n");
     }
     fflush(stderr);
     abort();
@@ -275,11 +346,17 @@ static void mark_stack(void) {
         for (i = 0; i < frame->nvars; i++) {
             mark(*frame->vars[i]);
         }
+        for (i = 0; i < frame->nparams; i++) {
+            mark(*frame->params[i]);
+        }
     }
 }
 
 static void free_obj(union object *o) {
     switch (o->head.tag) {
+    case TAG_UNDEFINED:
+        break;
+
     case TAG_FIXNUM:
         break;
 
@@ -339,6 +416,9 @@ static void mark1(void) {
     gcmark = o->head.back;
 
     switch (o->head.tag) {
+    case TAG_UNDEFINED:
+        break;
+
     case TAG_FIXNUM:
         break;
 
@@ -420,6 +500,7 @@ static val_t alloc(enum tag tag) {
     case TAG_HASHTBL:
         o = (union object *)calloc(sizeof(struct hashtbl), 1);
         break;
+    case TAG_UNDEFINED:
     default:
         die("Invalid tag");
     }
@@ -447,6 +528,7 @@ static val_t alloc(enum tag tag) {
 
 DEFINE2(cons, a, d) {
     LOCAL2(ret, z);
+    PARAM2(a, d);
 L   ret = alloc(TAG_CONS);
 
     MAKEFIX(z, 0);
@@ -464,6 +546,7 @@ L   CONS(ret)->cdr = d;
 
 DEFINE1(car, x) {
     LOCAL1(a);
+    PARAM1(x);
     if (EQ(x, nil)) {
         RETURN(nil);
     }
@@ -474,6 +557,7 @@ L   a = CONS(x)->car;
 
 DEFINE2(rplaca, x, a) {
     LOCAL0();
+    PARAM2(x, a);
 L   CONS(x)->car = a;
     WBARRIER(x, a);
     RETURN(x);
@@ -481,6 +565,7 @@ L   CONS(x)->car = a;
 
 DEFINE1(cdr, x) {
     LOCAL1(d);
+    PARAM1(x);
     if (EQ(x, nil)) {
         RETURN(nil);
     }
@@ -492,6 +577,7 @@ L   d = CONS(x)->cdr;
 
 DEFINE2(rplacd, x, d) {
     LOCAL0();
+    PARAM2(x, d);
 L   CONS(x)->cdr = d;
     WBARRIER(x, d);
     RETURN(x);
@@ -499,6 +585,7 @@ L   CONS(x)->cdr = d;
 
 DEFINE0(make_string) {
     LOCAL1(ret);
+    PARAM0();
 L   ret = alloc(TAG_STRING);
 L   STRING(ret)->slots = 0;
 L   STRING(ret)->length = 0;
@@ -508,6 +595,7 @@ L   STRING(ret)->cap = 0;
 
 DEFINE0(make_vector) {
     LOCAL1(ret);
+    PARAM0();
 L   ret = alloc(TAG_VECTOR);
 L   VECTOR(ret)->slots = 0;
 L   VECTOR(ret)->length = 0;
@@ -519,6 +607,7 @@ DEFINE1(vector_extend, v) {
     fixnum_t cap, newcap;
     void *ptr;
     LOCAL0();
+    PARAM1(v);
     if (TAG(v) == TAG_VECTOR) {
 L       cap = VECTOR(v)->cap;
 L       if (VECTOR(v)->length < cap) {
@@ -579,6 +668,7 @@ DEFINE2(vector_push_extend, x, v) {
     fixnum_t length;
     int ch;
     LOCAL1(ret);
+    PARAM2(x, v);
 L   vector_extend(v);
     if (TAG(v) == TAG_VECTOR) {
 L       length = VECTOR(v)->length;
@@ -603,6 +693,7 @@ L       die("Type error. Expected a string or vector.");
 DEFINE1(vector_length, v) {
     fixnum_t length;
     LOCAL1(ret);
+    PARAM1(v);
     if (TAG(v) == TAG_VECTOR) {
 L       length = VECTOR(v)->length;
     } else if (TAG(v) == TAG_STRING) {
@@ -619,6 +710,7 @@ DEFINE2(elt, v, i) {
     fixnum_t index;
     int ch;
     LOCAL1(a);
+    PARAM2(v, i);
     if (TAG(v) == TAG_VECTOR) {
 L       length = VECTOR(v)->length;
 L       index = FIXNUM(i);
@@ -647,6 +739,7 @@ DEFINE3(set_elt, v, i, a) {
     fixnum_t index;
     int ch;
     LOCAL0();
+    PARAM3(v, i, a);
     if (TAG(v) == TAG_VECTOR) {
 L       length = VECTOR(v)->length;
 L       index = FIXNUM(i);
@@ -672,6 +765,7 @@ L       die("Type error. Expected a string or vector.");
 
 DEFINE0(make_hashtbl) {
     LOCAL1(ret);
+    PARAM0();
 L   ret = alloc(TAG_HASHTBL);
 L   HASHTBL(ret)->fill = 0;
 L   HASHTBL(ret)->load = 0;
@@ -683,13 +777,17 @@ L   HASHTBL(ret)->slots = NULL;
 DEFINE2(hashval, val, depth) {
     fixnum_t i, length;
     unsigned int x;
-    LOCAL2(hc, a);
+    LOCAL3(hc, a, deeper);
+    PARAM2(val, depth);
 
 L   if (FIXNUM(depth) > HASH_DEPTH) {
         RETURN(hc);
     }
 
     switch (TAG(val)) {
+    case TAG_UNDEFINED:
+        break;
+
     case TAG_FIXNUM:
         RETURN(val);
 
@@ -701,13 +799,13 @@ L       x = CHAR(val);
     case TAG_CONS:
 L       x = FIXNUM(depth);
         x += 1;
-        MAKEFIX(depth, x);
+        MAKEFIX(deeper, x);
         x = 2166136261;
 L       a = car(val);
-L       hc = hashval(a, depth);
+L       hc = hashval(a, deeper);
 L       x = 6777619 * (FIXNUM(hc) ^ x);
 L       a = cdr(val);
-L       hc = hashval(a, depth);
+L       hc = hashval(a, deeper);
 L       x = 6777619 * (FIXNUM(hc) ^ x);
         MAKEFIX(hc, x & FIXNUM_MAX);
         RETURN(hc);
@@ -720,14 +818,14 @@ L       x = 6777619 * (FIXNUM(hc) ^ x);
     case TAG_STRING: case TAG_VECTOR:
 L       x = FIXNUM(depth);
         x += 1;
-        MAKEFIX(depth, x);
+        MAKEFIX(deeper, x);
 L       hc = vector_length(val);
 L       length = FIXNUM(hc);
         x = 2166136261;
         for (i = 0; i < length; i++) {
             MAKEFIX(hc, i);
 L           a = elt(val, hc);
-L           hc = hashval(a, depth);
+L           hc = hashval(a, deeper);
 L           x = 6777619 * (FIXNUM(hc) ^ x);
         }
         MAKEFIX(hc, x & FIXNUM_MAX);
@@ -745,6 +843,7 @@ L   die("Invalid tag");
 
 DEFINE1(sxhash, val) {
     LOCAL2(ret, depth);
+    PARAM1(val);
     MAKEFIX(depth, 0);
 L   ret = hashval(val, depth);
     RETURN(ret);
@@ -753,6 +852,7 @@ L   ret = hashval(val, depth);
 DEFINE2(equal, x, y) {
     fixnum_t i, length;
     LOCAL3(ret, a, b);
+    PARAM2(x, y);
 
     if (EQ(x, y)) {
         RETURN(t);
@@ -763,6 +863,9 @@ DEFINE2(equal, x, y) {
     }
 
     switch (TAG(x)) {
+    case TAG_UNDEFINED:
+        break;
+
     case TAG_FIXNUM:
         RETURN(nil);
 
@@ -837,6 +940,7 @@ DEFINE1(hash_expand, tbl) {
     fixnum_t fill, load, cap, newcap, j;
     struct hashcell *slots, *newslots;
     LOCAL2(hc, key);
+    PARAM1(tbl);
 
 L   fill = HASHTBL(tbl)->fill;
 L   load = HASHTBL(tbl)->load;
@@ -886,6 +990,7 @@ L       HASH_FIND(tbl, hc, key, i, mask);
 DEFINE3(hash_get, tbl, key, def) {
     fixnum_t i, mask;
     LOCAL2(ret, hc);
+    PARAM3(tbl, key, def);
 L   hash_expand(tbl);
 L   HASH_FIND(tbl, hc, key, i, mask);
 L   if (HASHTBL(tbl)->slots[i].present) {
@@ -899,6 +1004,7 @@ L       ret = HASHTBL(tbl)->slots[i].val;
 DEFINE3(hash_set, tbl, key, val) {
     unsigned int i, mask;
     LOCAL1(hc);
+    PARAM3(tbl, key, val);
 L   hash_expand(tbl);
 L   HASH_FIND(tbl, hc, key, i, mask);
 L   if (HASHTBL(tbl)->slots[i].present) {
@@ -926,6 +1032,7 @@ L       HASHTBL(tbl)->fill += 1;
 DEFINE3(hash_del, tbl, key, def) {
     unsigned int i, mask;
     LOCAL2(ret, hc);
+    PARAM3(tbl, key, def);
 L   hash_expand(tbl);
 L   HASH_FIND(tbl, hc, key, i, mask);
 L   if (HASHTBL(tbl)->slots[i].present) {
@@ -944,6 +1051,7 @@ L       HASHTBL(tbl)->fill -= 1;
 
 DEFINE1(make_symbol, name) {
     LOCAL1(ret);
+    PARAM1(name);
 L   ret = alloc(TAG_SYMBOL);
 L   SYMBOL(ret)->name = name;
     WBARRIER(ret, name);
@@ -952,6 +1060,7 @@ L   SYMBOL(ret)->name = name;
 
 DEFINE1(intern, x) {
     LOCAL2(s, z);
+    PARAM1(x);
 
     MAKEFIX(z, 0);
 
@@ -972,6 +1081,7 @@ DEFINE1(parse_token, x) {
     const unsigned char *s;
     char buf[32];
     LOCAL1(ret);
+    PARAM1(x);
 
 L   length = STRING(x)->length;
 L   s = STRING(x)->slots;
@@ -1021,6 +1131,7 @@ L   ret = intern(x);
 
 DEFINE1(memorize, symbol) {
     LOCAL1(name);
+    PARAM1(symbol);
 L   name = SYMBOL(symbol)->name;
     RBARRIER(symbol, name);
 L   hash_set(memo, name, symbol);
@@ -1028,9 +1139,28 @@ L   hash_set(memo, name, symbol);
 }
 
 DEFINE0(init) {
-    LOCAL2(str, c);
+    LOCAL1(h);
+    PARAM0();
 
 L   memo = make_hashtbl();
+
+L   h = make_hashtbl();
+L   smacros = cons(h, nil);
+
+L   h = make_hashtbl();
+L   macros = cons(h, nil);
+
+L   h = make_hashtbl();
+L   environ = cons(h, nil);
+
+L   h = make_hashtbl();
+L   functions = cons(h, nil);
+
+L   h = make_hashtbl();
+L   labels = nil;
+
+L   h = make_hashtbl();
+L   blocks = nil;
 
 L   memorize(nil);
 L   memorize(t);
@@ -1066,6 +1196,7 @@ static int munch(void) {
 DEFINE0(read_form) {
     int ch;
     LOCAL3(ret, tail, val);
+    PARAM0();
 
     ch = munch();
 
@@ -1244,27 +1375,118 @@ L           vector_push_extend(val, tail);
     }
 }
 
+    /*
+     * global environment
+     * return point
+     * code vector
+     * closure vector
+     * primary value
+     * values vector
+     *
+     * block
+     * catch
+     * eval-when
+     * flet
+     * function
+     * go
+     * if
+     * labels
+     * let
+     * let*
+     * load-time-value
+     * locally
+     * macrolet
+     * multiple-value-call
+     * multiple-value-prog1
+     * progn
+     * progv
+     * quote
+     * return-from
+     * setq
+     * symbol-macrolet
+     * tagbody
+     * the
+     * throw
+     * unwind-protect
+     */
+
+DEFINE2(find_tbl, env, key) {
+    LOCAL3(e, tbl, v);
+    PARAM2(env, key);
+    e = env;
+    while (1) {
+        if (EQ(e, nil)) {
+            RETURN(nil);
+        }
+L       tbl = car(e);
+L       v = hash_get(tbl, key, undefined);
+        if (!UNDEFINED(v)) {
+            RETURN(tbl);
+        }
+L       e = cdr(e);
+    }
+}
+
+
 DEFINE1(eval, x) {
-    LOCAL0();
-    RETURN(x);
+    LOCAL3(expr, v, tbl);
+    PARAM1(x);
+    expr = x;
+    while (1) {
+        if (TAG(expr) == TAG_SYMBOL) {
+            /* Symbol macros */
+L           tbl = find_tbl(smacros, expr);
+            if (!EQ(tbl, nil)) {
+L               v = hash_get(smacros, expr, nil);
+                expr = v;
+                continue;
+            }
+
+            /* Do a variable lookup */
+L           tbl = find_tbl(environ, expr);
+            if (!EQ(tbl, nil)) {
+L               v = hash_get(environ, expr, nil);
+                RETURN(v);
+            }
+
+L           die("Variable is unset");
+        } else if (TAG(expr) == TAG_CONS) {
+            /* Macro */
+            /* Special form */
+            /* Call */
+            RETURN(expr);
+        } else {
+            /* Literal values */
+            RETURN(expr);
+        }
+    }
 }
 
 DEFINE1(write_form, x) {
     unsigned long i, length;
     const unsigned char *s;
     LOCAL3(l, a, j);
+    PARAM1(x);
+
+    if (out == NULL) {
+        out = stdout;
+    }
 
     switch (TAG(x)) {
+    case TAG_UNDEFINED:
+        fprintf(out, "#<undefined>");
+        RETURN(x);
+
     case TAG_FIXNUM:
-L       printf("%d", FIXNUM(x));
+L       fprintf(out, "%d", FIXNUM(x));
         RETURN(x);
 
     case TAG_CHAR:
-L       printf("#\\%c", CHAR(x));
+L       fprintf(out, "#\\%c", CHAR(x));
         RETURN(x);
 
     case TAG_CONS:
-        putc('(', stdout);
+        putc('(', out);
         l = x;
         while (1) {
 L           a = car(l);
@@ -1276,29 +1498,29 @@ L           l = cdr(l);
             }
 
             if (TAG(l) != TAG_CONS) {
-                putc(' ', stdout);
-                putc('.', stdout);
-                putc(' ', stdout);
+                putc(' ', out);
+                putc('.', out);
+                putc(' ', out);
 L               write_form(l);
                 break;
             }
 
-            putc(' ', stdout);
+            putc(' ', out);
         }
-        putc(')', stdout);
+        putc(')', out);
         RETURN(x);
 
     case TAG_STRING:
-        putc('"', stdout);
+        putc('"', out);
 L       length = STRING(x)->length;
 L       s = STRING(x)->slots;
         for (i = 0; i < length; i++) {
             if (s[i] == '\\' || s[i] == '"') {
-                putc('\\', stdout);
+                putc('\\', out);
             }
-            putc(s[i], stdout);
+            putc(s[i], out);
         }
-        putc('"', stdout);
+        putc('"', out);
         RETURN(x);
 
     case TAG_SYMBOL:
@@ -1306,26 +1528,28 @@ L       a = SYMBOL(x)->name;
         RBARRIER(x, a);
 L       length = STRING(a)->length;
 L       s = STRING(a)->slots;
-        fwrite(s, length, 1, stdout);
+        for (i = 0; i < length; i++) {
+            putc(s[i], out);
+        }
         RETURN(x);
 
     case TAG_VECTOR:
-        putc('#', stdout);
-        putc('(', stdout);
+        putc('#', out);
+        putc('(', out);
 L       length = VECTOR(x)->length;
         for (i = 0; i < length; i++) {
             if (i > 0) {
-                putc(' ', stdout);
+                putc(' ', out);
             }
             MAKEFIX(j, i);
 L           a = elt(x, j);
 L           write_form(a);
         }
-        putc(')', stdout);
+        putc(')', out);
         break;
 
     case TAG_HASHTBL:
-        fputs("#<HASHTBL>", stdout);
+        fprintf(out, "#<HASHTBL>");
         break;
 
     default:
@@ -1337,6 +1561,7 @@ L       die("Invalid value");
 
 DEFINE1(print, x) {
     LOCAL0();
+    PARAM1(x);
 L   write_form(x);
     putc('\n', stdout);
     RETURN(x);
@@ -1344,6 +1569,7 @@ L   write_form(x);
 
 DEFINE0(repl) {
     LOCAL2(x, y);
+    PARAM0();
     while (1) {
 L       x = read_form();
 

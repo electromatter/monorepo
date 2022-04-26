@@ -17,6 +17,25 @@ function count(string, pattern,    i, n) {
     return n
 }
 
+function comma_split(string, arr) {
+    split(g[2], arr, ",")
+    for (i in arr) {
+        gsub(/ */, "", arr[i])
+    }
+}
+
+function comma_join(arr,      result) {
+    result = ""
+    for (i in arr) {
+        if (result) {
+            result = result "," arr[i]
+        } else {
+            result = arr[i]
+        }
+    }
+    return result
+}
+
 /\/\// {
     print "ERROR :" NR " Use C style comments"
 }
@@ -47,11 +66,27 @@ in_func && comment && ! / *\/\*.*\*\/ */ {
     if (!has_local) {
         print "ERROR no LOCALn() in " name
     }
+    if (!has_param) {
+        print "ERROR no PARAMn() in " name
+    }
 }
 
 # for LOCALn()
 !comment && in_func && /LOCAL/ {
     has_local = 1
+}
+
+!comment && in_func && match($0, /^ *PARAM[0-9]\(([^)]*)\);/, g) {
+    if (!has_local) {
+        print "ERROR expected PARAMn() after LOCALn()"
+    }
+    has_param = 1
+    gsub(/ */, "", g[1])
+    expected = comma_join(args)
+    got = g[1]
+    if (expected != got) {
+        print "ERROR wrong PARAMn(...) got " got " expected " expected
+    }
 }
 
 # Demand lines start with L or a space
@@ -109,11 +144,13 @@ in_func && comment && ! / *\/\*.*\*\/ */ {
 }
 
 # Special function definition and declaration
-!comment && match($0, /^DEFINE[0-9]\(([^,)]*)[^)]*\) *{/, g) {
+!comment && match($0, /^DEFINE[0-9]\(([^,)]*),([^)]*)\) *{/, g) {
     in_func = 1
     name = g[1]
     funs[name] = 1
     has_local = 0
+    has_param = 0
+    comma_split(g[2], args)
 }
 
 !comment && match($0, /^DECLARE\(([^)]*)\)/, g) {
