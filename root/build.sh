@@ -15,12 +15,14 @@
 # OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.        #
 ################################################################################
 
-# Short script to create an archlinux image in ~10s
-
 set -ue
 
 PACSTRAP_PACKAGES=(base)
-PACKAGES=(linux mkinitcpio grub vim sudo)
+PACKAGES=( \
+    linux linux-firmware amd-ucode intel-ucode mkinitcpio grub \
+    vim sudo nftables lvm2 openssh ntp rng-tools util-linux \
+    e2fsprogs openbsd-netcat tcpdump mosh dnsutils \
+)
 
 MOUNTS=(/dev /sys /proc /run /tmp /var/tmp /var/cache/pacman)
 
@@ -64,7 +66,7 @@ main() {
 
     {
         qemu-img create "${img}" "${size}"
-        qemu-nbd -f raw --cache none -c "${dev}" "${img}"
+        qemu-nbd -f raw --cache unsafe -c "${dev}" "${img}"
         blkdiscard "${dev}"
 
         printf 'size=+, type=L\n' | sfdisk "${dev}"
@@ -105,12 +107,27 @@ main() {
 Name=en*
 
 [Network]
-DHCP=ipv4
+#DHCP=ipv4
+Address=10.1.1.2/32
+
+[Route]
+Destination=10.1.1.1
+Scope=link
+
+[Route]
+Gateway=10.1.1.1
 EOF
-            systemctl enable systemd-networkd
 
             groupadd sudo
             useradd --groups sudo -p "${password}" -m -s /bin/bash erai
+            mkdir -p /home/erai/.ssh
+            cat > /home/erai/.ssh/authorized_keys << EOF
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOkTPTqtg1fJUjP5750U8EcDQ9wc8PlphBCTv6uSV0Ga
+EOF
+            chown -R erai /home/erai/.ssh
+            chgrp -R erai /home/erai/.ssh
+            chmod 0755 /home/erai/.ssh
+
             cat > /etc/sudoers << EOF
 root ALL=(ALL) ALL
 %sudo ALL=(ALL:ALL) NOPASSWD: ALL
@@ -125,7 +142,14 @@ HOOKS=(systemd block filesystems)
 COMPRESSION=zstd
 EOF
 
+            cat > /etc/resolv.conf << EOF
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+EOF
+
             pacman -S --noconfirm "$@"
+
+            systemctl enable systemd-networkd ntpd sshd rngd
 
             cat > /etc/default/grub << EOF
 GRUB_DEFAULT=0
