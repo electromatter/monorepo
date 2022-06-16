@@ -1,3 +1,4 @@
+; vim: ft=lisp et sw=2 :
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Copyright (c) 2022 Eric Chai <electromatter@gmail.com>                     ;;
 ;;                                                                            ;;
@@ -14,7 +15,111 @@
 ;; OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.      ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+; Calling convention is a Modified syscall convention.
+; return        = rax
+; arguments     = rdi rsi rdx r10 r8 r9
+; caller saved  = rax rsi rdi rcx rdx r8 r9 r10 r11
+; callee saved  = rbx rbp rsp r12 r13 r14 r15
+
+; EOF = -1
+
 (text
+  ; (_start)
   (label _start)
+
+  ; helpers
+  ; struct num
+  ; struct symbol
+  ; struct cons
+  ; struct lab
+  ; struct fix
+  ; struct blob
+  ; reader
+  ; evaluator
+  ; fixup
+  ; output
+
+  (jmp exit-success)
+
+  ; (alloc pages:rdi)
+  (label alloc)
+  (mov rsi rdi)
+  (loadi rcx 32)
+  (shr rdi rcx)
+  (test rdi rdi)
+  (jnz exit-failure)
+  (loadi rcx 12)
+  (shl rsi rcx)
+  (loadi rdx 3)         ; RW-
+  (loadi r10 34)        ; PRIVATE+ANON
+  (loadi r8 -1)
+  (xor r9 r9)
+  (call sys_mmap)
+  (loadi rdi -4096)
+  (cmp rax rdi)
+  (jae exit-failure)
+  (ret)
+
+  ; (sys_mmap addr:rdi, len:rsi, prot:rdx, flags:r10, fd:r8, off:r9)
+  (label sys_mmap)
+  (loadi rax 9)
+  (syscall)
+  (ret)
+
+  ; (read-char)
+  (label read-char)
+  (xor rax rax)
+  (push rax)
+  (xor rdi rdi)
+  (mov rsi rsp)
+  (loadi rdx 1)
+  (call sys_read)
+  (test rax rax)
+  (jz read-char%eof)
+  (cmp rax rdx)
+  (jnz exit-failure)
+  (pop rax)
+  (ret)
+  (label read-char%eof)
+  (pop rax)
+  (loadi rax -1)
+  (ret)
+
+  ; (sys_read fd:rdi, buf:rsi, count:rdx)
+  (label sys_read)
+  (loadi rax 0)
+  (syscall)
+  (ret)
+
+  ; (write-char x:rdi)
+  (label write-char)
+  (push rdi)
+  (loadi rdi 1)
+  (mov rsi rsp)
+  (loadi rdx 1)
+  (call sys_write)
+  (cmp rax rdx)
+  (jnz exit-failure)
+  (pop rdi)
+  (ret)
+
+  ; (sys_write fd:rdi, buf:rsi, count:rdx)
+  (label sys_write)
+  (loadi rax 1)
+  (syscall)
+  (ret)
+
+  ; (exit-success)
+  (label exit-success)
+  (loadi rdi 0)
+  (jmp sys_exit)
+
+  ; (exit-failure)
+  (label exit-failure)
+  (loadi rdi 1)
+  (jmp sys_exit)
+
+  ; (sys_exit status:rdi)
+  (label sys_exit)
   (loadi rax 60)
   (syscall))
