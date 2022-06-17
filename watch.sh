@@ -50,7 +50,7 @@ main() {
 		kill -INT 0
 	) &
 
-	eval "set -x; ${BUILD}" 2>&1 | eval "${PAGER}"
+	eval "set -x; ${BUILD}" 2>&1 <& /dev/null | eval "${PAGER}"
 
 	if ! kill -0 "${watch}" 2> /dev/null; then
 		kill -TERM 0
