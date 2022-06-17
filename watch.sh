@@ -21,7 +21,7 @@
 : "${DELAY:="1"}"
 : "${TIMEOUT:="1"}"
 
-: "${PAGER:="less +F"}"
+: "${PAGER:="less -r +F"}"
 
 newest() {
 	{
@@ -50,7 +50,7 @@ main() {
 		kill -INT 0
 	) &
 
-	eval "set -xe; ${BUILD}" 2>&1 | eval "${PAGER}"
+	eval "set -x; ${BUILD}" 2>&1 | eval "${PAGER}"
 
 	if ! kill -0 "${watch}" 2> /dev/null; then
 		kill -TERM 0
