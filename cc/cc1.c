@@ -3304,6 +3304,9 @@ prototype(c: *compiler, n: *node): *type {
 		return 0:*type;
 	}
 
+	c.lineno = n.lineno;
+	c.colno = 0;
+
 	kind = n.kind;
 	if (kind == N_IDENT) {
 		if (!strcmp(n.s, "void")) {
