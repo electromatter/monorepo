@@ -431,7 +431,7 @@ comp_setup(c: *compiler): void {
 
 	c.nc = getchar();
 	c.lineno = 1;
-	c.colno = 0;
+	c.colno = 1;
 	c.tlen = 0;
 	c.tmax = 4096;
 	c.token = alloc(c, c.tmax);
