@@ -431,7 +431,7 @@ comp_setup(c: *compiler): void {
 
 	c.nc = getchar();
 	c.lineno = 1;
-	c.colno = 1;
+	c.colno = 0;
 	c.tlen = 0;
 	c.tmax = 4096;
 	c.token = alloc(c, c.tmax);
@@ -2449,6 +2449,9 @@ compile_expr(c: *compiler, d: *decl, n: *node, rhs: int): void {
 	var v: *decl;
 	var kind: int;
 
+	c.lineno = n.lineno;
+	c.colno = 0;
+
 	kind = n.kind;
 	if (kind == N_STR) {
 		if (!rhs) {
@@ -3058,7 +3061,7 @@ compile_stmt(c: *compiler, d: *decl, n: *node, top: *label, out: *label): void {
 		return;
 	}
 
-	c.lineno = c.lineno;
+	c.lineno = n.lineno;
 	c.colno = 0;
 
 	kind = n.kind;

@@ -4,7 +4,7 @@ set -ue
 
 # Environmental variables used to compile the bootstrap
 : ${CC:=gcc}
-: ${CFLAGS:=-Os -Wall -Wextra -Wno-unused -pedantic -std=c99}
+: ${CFLAGS:=-Wall -Wextra -Wno-unused -pedantic -std=c99}
 
 # First compile the bootstrap
 ${CC} ${CFLAGS} -o cc0 ./cc0.c || exit 1
