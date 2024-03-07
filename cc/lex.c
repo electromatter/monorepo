@@ -593,22 +593,24 @@ intern(c: *compiler): *byte {
 
 find_tag(c: *compiler, s: *byte): *tag {
 	var t: *tag;
-	t = c.tags;
+	var link: **tag;
+	link = &c.tags;
 	loop {
+		t = *link;
 		if (!t) {
 			break;
 		}
 		if (!strcmp(t.s, s)) {
 			return t;
 		}
-		t = t.next;
+		link = &t.next;
 	}
 	t = alloc(&c.a, sizeof(*t)): *tag;
-	t.next = c.tags;
+	t.next = 0:*tag;
 	t.s = intern(c);
 	t.id = c.ntags;
 	c.ntags = c.ntags + 1;
-	c.tags = t;
+	*link = t;
 	return t;
 }
 
