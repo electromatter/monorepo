@@ -73,6 +73,9 @@ struct decl {
 	var_type: *type;
 	var_offset: int;
 	var_def: *node;
+
+	goto_defined: int;
+	goto_label: *label;
 }
 
 struct compiler {
@@ -165,6 +168,8 @@ enum {
 	N_CONTINUE,
 	N_RETURN,
 	N_VARDECL,
+	N_LABEL,
+	N_GOTO,
 	N_ASSIGN,
 	N_SIZEOF,
 	N_REF,
@@ -1625,12 +1630,48 @@ parse_var_stmt(c: *compiler): *node {
 	return a;
 }
 
+// label_stmt := ':' ident
+parse_label_stmt(c: *compiler): *node {
+	var a: *node;
+
+	if (c.tt != T_COLON) {
+		return 0:*node;
+	}
+	feed(c);
+
+	a = parse_ident(c);
+	if (!a) {
+		die(c, "expected ident");
+	}
+
+	return mknode1(c, N_LABEL, a);
+}
+
+// goto_stmt := 'goto' ident
+parse_goto_stmt(c: *compiler): *node {
+	var a: *node;
+
+	if (c.tt != T_IDENT || strcmp(c.token, "goto")) {
+		return 0:*node;
+	}
+	feed(c);
+
+	a = parse_ident(c);
+	if (!a) {
+		die(c, "expected ident");
+	}
+
+	return mknode1(c, N_GOTO, a);
+}
+
 // stmt := if_stmt
 //       | loop_stmt
 //       | break_stmt ';'
 //       | continue_stmt ';'
 //       | return_stmt ';'
 //       | var_stmt ';'
+//       | label_stmt ';'
+//       | goto_stmt ';'
 //       | expr ';'
 parse_stmt(c: *compiler): *node {
 	var n: *node;
@@ -1676,6 +1717,26 @@ parse_stmt(c: *compiler): *node {
 	}
 
 	n = parse_var_stmt(c);
+	if (n) {
+		if (c.tt != T_SEMI) {
+			die(c, "expected ;");
+		}
+		feed(c);
+
+		return n;
+	}
+
+	n = parse_label_stmt(c);
+	if (n) {
+		if (c.tt != T_SEMI) {
+			die(c, "expected ;");
+		}
+		feed(c);
+
+		return n;
+	}
+
+	n = parse_goto_stmt(c);
 	if (n) {
 		if (c.tt != T_SEMI) {
 			die(c, "expected ;");
@@ -1786,6 +1847,7 @@ parse_enum_decl(c: *compiler): *node {
 // type := ident
 //       | '*' type
 //       | '(' type ')'
+//       | 'func' func_type
 parse_type(c: *compiler): *node {
 	var n: *node;
 
@@ -1806,6 +1868,17 @@ parse_type(c: *compiler): *node {
 			die(c, "expected )");
 		}
 		feed(c);
+
+		return n;
+	}
+
+	if (c.tt == T_IDENT && !strcmp(c.token, "func")) {
+		feed(c);
+
+		n = parse_func_type(c);
+		if (!n) {
+			die(c, "expected func_type");
+		}
 
 		return n;
 	}
@@ -1958,24 +2031,18 @@ parse_arg_list(c: *compiler): *node {
 	}
 }
 
-// func_decl := ident '(' ')' ':' type
-//            | ident '(' arg_list ')' ':' type
-parse_func_decl(c: *compiler): *node {
+// func_type := '(' ')' ':' type
+//            | '(' arg_list ')' ':' type
+parse_func_type(c: *compiler): *node {
 	var a: *node;
 	var b: *node;
-	var t: *node;
-
-	a = parse_ident(c);
-	if (!a) {
-		return 0:*node;
-	}
 
 	if (c.tt != T_LPAR) {
-		die(c, "expected (");
+		return 0: *node;
 	}
 	feed(c);
 
-	b = parse_arg_list(c);
+	a = parse_arg_list(c);
 
 	if (c.tt != T_RPAR) {
 		die(c, "expected )");
@@ -1987,12 +2054,30 @@ parse_func_decl(c: *compiler): *node {
 	}
 	feed(c);
 
-	t = parse_type(c);
-	if (!t) {
+	b = parse_type(c);
+	if (!b) {
 		die(c, "expected type");
 	}
 
-	return mknode(c, N_FUNCDECL, a, mknode(c, N_FUNCTYPE, b, t));
+	return mknode(c, N_FUNCTYPE, a, b);
+}
+
+// func_decl := ident func_type
+parse_func_decl(c: *compiler): *node {
+	var a: *node;
+	var b: *node;
+
+	a = parse_ident(c);
+	if (!a) {
+		return 0:*node;
+	}
+
+	b = parse_func_type(c);
+	if (!b) {
+		die(c, "expected func_type");
+	}
+
+	return mknode(c, N_FUNCDECL, a, b);
 }
 
 // func := func_decl '{' stmt_list '}'
@@ -2373,6 +2458,16 @@ hoist_locals(c: *compiler, d: *decl, n: *node, offset: int): int {
 		}
 	} else if (kind == N_LOOP) {
 		return hoist_locals(c, d, n.a, offset);
+	} else if (kind == N_LABEL) {
+		name = n.a.s;
+		v = find(c, d.name, name, 1);
+
+		if (v.goto_defined) {
+			die(c, "duplicate goto");
+		}
+		v.goto_defined = 1;
+
+		return offset;
 	} else if (kind != N_VARDECL) {
 		return offset;
 	}
@@ -2502,7 +2597,7 @@ compile_expr(c: *compiler, d: *decl, n: *node, rhs: int): void {
 			compile_expr(c, d, n.b, 1);
 		}
 
-		compile_expr(c, d, n.a, 0);
+		compile_expr(c, d, n.a, 1);
 
 		if (n.a.t.kind != TY_FUNC) {
 			die(c, "calling not a function");
@@ -3055,6 +3150,7 @@ compile_expr(c: *compiler, d: *decl, n: *node, rhs: int): void {
 compile_stmt(c: *compiler, d: *decl, n: *node, top: *label, out: *label): void {
 	var no: *label;
 	var ifout: *label;
+	var v: *decl;
 	var kind: int;
 
 	if (!n) {
@@ -3129,6 +3225,15 @@ compile_stmt(c: *compiler, d: *decl, n: *node, top: *label, out: *label): void {
 			emit_num(c, 0);
 		}
 		emit_ret(c);
+	} else if (kind == N_LABEL) {
+		v = find(c, d.name, n.a.s, 0);
+		fixup_label(c, v.goto_label);
+	} else if (kind == N_GOTO) {
+		v = find(c, d.name, n.a.s, 0);
+		if (!v || !v.goto_defined) {
+			die(c, "label not defined");
+		}
+		emit_jmp(c, v.goto_label);
 	} else if (kind != N_VARDECL) {
 		compile_expr(c, d, n, 1);
 		emit_pop(c, 1);
@@ -3211,6 +3316,9 @@ find(c: *compiler, name: *byte, member_name: *byte, make: int): *decl {
 	d.var_type = 0:*type;
 	d.var_offset = 0;
 	d.var_def = 0:*node;
+
+	d.goto_defined = 0;
+	d.goto_label = mklabel(c);
 
 	*link = d;
 
