@@ -998,14 +998,25 @@ nlist_sort(l: *nlist): void {
 
 	i = l.fill - 1;
 	loop {
+		j = i;
+		loop {
+			k = (j << 1) + 1;
+			if (k >= l.fill) {
+				break;
+			}
+			if (k + 1 < l.fill && l.live[k].id < l.live[k + 1].id) {
+				k = k + 1;
+			}
+			if (l.live[j].id >= l.live[k].id) {
+				break;
+			}
+			tmp = l.live[k];
+			l.live[k] = l.live[j];
+			l.live[j] = tmp;
+			j = k;
+		}
 		if (i == 0) {
 			break;
-		}
-		j = (i - 1) >> 1;
-		if (l.live[i].id > l.live[j].id) {
-			tmp = l.live[j];
-			l.live[j] = l.live[i];
-			l.live[i] = tmp;
 		}
 		i = i - 1;
 	}
