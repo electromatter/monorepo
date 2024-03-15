@@ -1188,8 +1188,8 @@ parse_unary_expr(c: *compiler): *node {
 
 
 // shift_expr := unary_expr
-//             | unary_expr '<<' shift_expr
-//             | unary_expr '>>' shift_expr
+//             | shift_expr '<<' unary_expr
+//             | shift_expr '>>' unary_expr
 parse_shift_expr(c: *compiler): *node {
 	var a: *node;
 	var b: *node;
@@ -1199,30 +1199,36 @@ parse_shift_expr(c: *compiler): *node {
 		return 0:*node;
 	}
 
-	if (c.tt == T_LSH) {
-		feed(c);
+	loop {
+		if (c.tt == T_LSH) {
+			feed(c);
 
-		b = parse_shift_expr(c);
+			b = parse_unary_expr(c);
+			if (!b) {
+				die(c, "expected unary_expr");
+			}
 
-		return mknode(c, N_LSH, a, b);
+			a = mknode(c, N_LSH, a, b);
+		} else if (c.tt == T_RSH) {
+			feed(c);
+
+			b = parse_unary_expr(c);
+			if (!b) {
+				die(c, "expected unary_expr");
+			}
+
+			a = mknode(c, N_RSH, a, b);
+		} else {
+			return a;
+		}
 	}
-
-	if (c.tt == T_RSH) {
-		feed(c);
-
-		b = parse_shift_expr(c);
-
-		return mknode(c, N_RSH, a, b);
-	}
-
-	return a;
 }
 
 // mul_expr := shift_expr
-//           | shift_expr '*' mul_expr
-//           | shift_expr '/' mul_expr
-//           | shift_expr '%' mul_expr
-//           | shift_expr '&' mul_expr
+//           | mul_expr '*' shift_expr
+//           | mul_expr '/' shift_expr
+//           | mul_expr '%' shift_expr
+//           | mul_expr '&' shift_expr
 parse_mul_expr(c: *compiler): *node {
 	var a: *node;
 	var b: *node;
@@ -1232,46 +1238,54 @@ parse_mul_expr(c: *compiler): *node {
 		return 0:*node;
 	}
 
-	if (c.tt == T_STAR) {
-		feed(c);
+	loop {
+		if (c.tt == T_STAR) {
+			feed(c);
 
-		b = parse_mul_expr(c);
+			b = parse_shift_expr(c);
+			if (!b) {
+				die(c, "expected shift_expr");
+			}
 
-		return mknode(c, N_MUL, a, b);
+			a = mknode(c, N_MUL, a, b);
+		} else if (c.tt == T_DIV) {
+			feed(c);
+
+			b = parse_shift_expr(c);
+			if (!b) {
+				die(c, "expected shift_expr");
+			}
+
+			a = mknode(c, N_DIV, a, b);
+		} else if (c.tt == T_MOD) {
+			feed(c);
+
+			b = parse_shift_expr(c);
+			if (!b) {
+				die(c, "expected shift_expr");
+			}
+
+			a = mknode(c, N_MOD, a, b);
+		} else if (c.tt == T_AMP) {
+			feed(c);
+
+			b = parse_shift_expr(c);
+			if (!b) {
+				die(c, "expected shift_expr");
+			}
+
+			a = mknode(c, N_AND, a, b);
+		} else {
+			return a;
+		}
 	}
-
-	if (c.tt == T_DIV) {
-		feed(c);
-
-		b = parse_mul_expr(c);
-
-		return mknode(c, N_DIV, a, b);
-	}
-
-	if (c.tt == T_MOD) {
-		feed(c);
-
-		b = parse_mul_expr(c);
-
-		return mknode(c, N_MOD, a, b);
-	}
-
-	if (c.tt == T_AMP) {
-		feed(c);
-
-		b = parse_mul_expr(c);
-
-		return mknode(c, N_AND, a, b);
-	}
-
-	return a;
 }
 
 // add_expr := mul_expr
-//           | mul_expr '+' add_expr
-//           | mul_expr '-' add_expr
-//           | mul_expr '|' add_expr
-//           | mul_expr '^' add_expr
+//           | add_expr '+' mul_expr
+//           | add_expr '-' mul_expr
+//           | add_expr '|' mul_expr
+//           | add_expr '^' mul_expr
 parse_add_expr(c: *compiler): *node {
 	var a: *node;
 	var b: *node;
@@ -1281,39 +1295,47 @@ parse_add_expr(c: *compiler): *node {
 		return 0:*node;
 	}
 
-	if (c.tt == T_ADD) {
-		feed(c);
+	loop {
+		if (c.tt == T_ADD) {
+			feed(c);
 
-		b = parse_add_expr(c);
+			b = parse_mul_expr(c);
+			if (!b) {
+				die(c, "expected mul_expr");
+			}
 
-		return mknode(c, N_ADD, a, b);
+			a = mknode(c, N_ADD, a, b);
+		} else if (c.tt == T_SUB) {
+			feed(c);
+
+			b = parse_mul_expr(c);
+			if (!b) {
+				die(c, "expected mul_expr");
+			}
+
+			a = mknode(c, N_SUB, a, b);
+		} else if (c.tt == T_OR) {
+			feed(c);
+
+			b = parse_mul_expr(c);
+			if (!b) {
+				die(c, "expected mul_expr");
+			}
+
+			a = mknode(c, N_OR, a, b);
+		} else if (c.tt == T_XOR) {
+			feed(c);
+
+			b = parse_mul_expr(c);
+			if (!b) {
+				die(c, "expected mul_expr");
+			}
+
+			a = mknode(c, N_XOR, a, b);
+		} else {
+			return a;
+		}
 	}
-
-	if (c.tt == T_SUB) {
-		feed(c);
-
-		b = parse_add_expr(c);
-
-		return mknode(c, N_SUB, a, b);
-	}
-
-	if (c.tt == T_OR) {
-		feed(c);
-
-		b = parse_add_expr(c);
-
-		return mknode(c, N_OR, a, b);
-	}
-
-	if (c.tt == T_XOR) {
-		feed(c);
-
-		b = parse_add_expr(c);
-
-		return mknode(c, N_XOR, a, b);
-	}
-
-	return a;
 }
 
 // comp_expr := add_expr
@@ -1402,8 +1424,8 @@ parse_comp_expr(c: *compiler): *node {
 }
 
 // bool_expr := bool_expr
-//            | add_expr '&&' bool_expr
-//            | add_expr '||' bool_expr
+//            | bool_expr '&&' comp_expr
+//            | bool_expr '||' comp_expr
 parse_bool_expr(c: *compiler): *node {
 	var a: *node;
 	var b: *node;
@@ -1482,7 +1504,7 @@ parse_if_stmt(c: *compiler): *node {
 
 	loop {
 		a = parse_expr(c);
-		if (!a) {
+		if !a {
 			die(c, "expected expr");
 		}
 

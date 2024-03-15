@@ -992,8 +992,8 @@ unary_expr(void)
 
 
 // shift_expr := unary_expr
-//             | unary_expr '<<' shift_expr
-//             | unary_expr '>>' shift_expr
+//             | shift_expr '<<' unary_expr
+//             | shift_expr '>>' unary_expr
 struct node *
 shift_expr(void)
 {
@@ -1005,30 +1005,36 @@ shift_expr(void)
 		return 0;
 	}
 
-	if (tt == T_LSH) {
-		feed();
+	while (1) {
+		if (tt == T_LSH) {
+			feed();
 
-		b = shift_expr();
+			b = unary_expr();
+			if (!b) {
+				die("expected unary_expr");
+			}
 
-		return mknode(N_LSH, a, b);
+			a = mknode(N_LSH, a, b);
+		} else if (tt == T_RSH) {
+			feed();
+
+			b = unary_expr();
+			if (!b) {
+				die("expected unary_expr");
+			}
+
+			a = mknode(N_RSH, a, b);
+		} else {
+			return a;
+		}
 	}
-
-	if (tt == T_RSH) {
-		feed();
-
-		b = shift_expr();
-
-		return mknode(N_RSH, a, b);
-	}
-
-	return a;
 }
 
 // mul_expr := shift_expr
-//           | shift_expr '*' mul_expr
-//           | shift_expr '/' mul_expr
-//           | shift_expr '%' mul_expr
-//           | shift_expr '&' mul_expr
+//           | mul_expr '*' shift_expr
+//           | mul_expr '/' shift_expr
+//           | mul_expr '%' shift_expr
+//           | mul_expr '&' shift_expr
 struct node *
 mul_expr(void)
 {
@@ -1040,46 +1046,54 @@ mul_expr(void)
 		return 0;
 	}
 
-	if (tt == T_STAR) {
-		feed();
+	while (1) {
+		if (tt == T_STAR) {
+			feed();
 
-		b = mul_expr();
+			b = shift_expr();
+			if (!b) {
+				die("expected shift_expr");
+			}
 
-		return mknode(N_MUL, a, b);
+			a = mknode(N_MUL, a, b);
+		} else if (tt == T_DIV) {
+			feed();
+
+			b = shift_expr();
+			if (!b) {
+				die("expected shift_expr");
+			}
+
+			a = mknode(N_DIV, a, b);
+		} else if (tt == T_MOD) {
+			feed();
+
+			b = shift_expr();
+			if (!b) {
+				die("expected shift_expr");
+			}
+
+			a = mknode(N_MOD, a, b);
+		} else if (tt == T_AMP) {
+			feed();
+
+			b = shift_expr();
+			if (!b) {
+				die("expected shift_expr");
+			}
+
+			a = mknode(N_AND, a, b);
+		} else {
+			return a;
+		}
 	}
-
-	if (tt == T_DIV) {
-		feed();
-
-		b = mul_expr();
-
-		return mknode(N_DIV, a, b);
-	}
-
-	if (tt == T_MOD) {
-		feed();
-
-		b = mul_expr();
-
-		return mknode(N_MOD, a, b);
-	}
-
-	if (tt == T_AMP) {
-		feed();
-
-		b = mul_expr();
-
-		return mknode(N_AND, a, b);
-	}
-
-	return a;
 }
 
 // add_expr := mul_expr
-//           | mul_expr '+' add_expr
-//           | mul_expr '-' add_expr
-//           | mul_expr '|' add_expr
-//           | mul_expr '^' add_expr
+//           | add_expr '+' mul_expr
+//           | add_expr '-' mul_expr
+//           | add_expr '|' mul_expr
+//           | add_expr '^' mul_expr
 struct node *
 add_expr(void)
 {
@@ -1091,39 +1105,47 @@ add_expr(void)
 		return 0;
 	}
 
-	if (tt == T_ADD) {
-		feed();
+	while (1) {
+		if (tt == T_ADD) {
+			feed();
 
-		b = add_expr();
+			b = mul_expr();
+			if (!b) {
+				die("expected mul_expr");
+			}
 
-		return mknode(N_ADD, a, b);
+			a = mknode(N_ADD, a, b);
+		} else if (tt == T_SUB) {
+			feed();
+
+			b = mul_expr();
+			if (!b) {
+				die("expected mul_expr");
+			}
+
+			a = mknode(N_SUB, a, b);
+		} else if (tt == T_OR) {
+			feed();
+
+			b = mul_expr();
+			if (!b) {
+				die("expected mul_expr");
+			}
+
+			a = mknode(N_OR, a, b);
+		} else if (tt == T_XOR) {
+			feed();
+
+			b = mul_expr();
+			if (!b) {
+				die("expected mul_expr");
+			}
+
+			a = mknode(N_XOR, a, b);
+		} else {
+			return a;
+		}
 	}
-
-	if (tt == T_SUB) {
-		feed();
-
-		b = add_expr();
-
-		return mknode(N_SUB, a, b);
-	}
-
-	if (tt == T_OR) {
-		feed();
-
-		b = add_expr();
-
-		return mknode(N_OR, a, b);
-	}
-
-	if (tt == T_XOR) {
-		feed();
-
-		b = add_expr();
-
-		return mknode(N_XOR, a, b);
-	}
-
-	return a;
 }
 
 // comp_expr := add_expr
@@ -1214,8 +1236,8 @@ comp_expr(void)
 }
 
 // bool_expr := bool_expr
-//            | add_expr '&&' bool_expr
-//            | add_expr '||' bool_expr
+//            | comp_expr '&&' bool_expr
+//            | comp_expr '||' bool_expr
 struct node *
 bool_expr(void)
 {
